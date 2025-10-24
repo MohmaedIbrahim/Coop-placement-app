@@ -30,8 +30,8 @@ page = st.sidebar.radio("Navigation",
                         index=0)
 
 # Helper functions
-def generate_synthetic_data(n_students=15):
-    """Generate synthetic dataset with 15 students"""
+def generate_synthetic_data(n_students=15, n_companies=15):
+    """Generate synthetic dataset with flexible numbers"""
     np.random.seed(42)
     
     # Students
@@ -42,24 +42,38 @@ def generate_synthetic_data(n_students=15):
         'gpa': np.random.uniform(3.0, 4.0, n_students).round(2)
     })
     
-    # Companies - exactly 15 to match students
-    company_info = [
-        ("QBE", "General Insurance", 1, 1),
-        ("IAG", "General Insurance", 1, 1),
-        ("Suncorp", "General Insurance", 1, 1),
-        ("Allianz", "General Insurance", 1, 1),
-        ("Deloitte", "Consultancy", 1, 1),
-        ("PwC", "Consultancy", 1, 1),
-        ("KPMG", "Consultancy", 1, 1),
-        ("EY", "Consultancy", 1, 1),
-        ("AMP", "Life Insurance", 1, 1),
-        ("MLC", "Life Insurance", 1, 1),
-        ("TAL", "Life Insurance", 1, 1),
-        ("Zurich", "Life Insurance", 1, 1),
-        ("NDIS Provider A", "Care/Disability", 1, 1),
-        ("NDIS Provider B", "Care/Disability", 1, 1),
-        ("NDIS Provider C", "Care/Disability", 1, 1),
+    # Companies
+    base_companies = [
+        ("QBE", "General Insurance"),
+        ("IAG", "General Insurance"),
+        ("Suncorp", "General Insurance"),
+        ("Allianz", "General Insurance"),
+        ("Deloitte", "Consultancy"),
+        ("PwC", "Consultancy"),
+        ("KPMG", "Consultancy"),
+        ("EY", "Consultancy"),
+        ("AMP", "Life Insurance"),
+        ("MLC", "Life Insurance"),
+        ("TAL", "Life Insurance"),
+        ("Zurich", "Life Insurance"),
+        ("NDIS Provider A", "Care/Disability"),
+        ("NDIS Provider B", "Care/Disability"),
+        ("NDIS Provider C", "Care/Disability"),
     ]
+    
+    company_info = []
+    industries = ['General Insurance', 'Consultancy', 'Life Insurance', 'Care/Disability']
+    
+    for i in range(n_companies):
+        if i < len(base_companies):
+            name, industry = base_companies[i]
+        else:
+            industry = industries[i % len(industries)]
+            name = f"Company_{i+1:02d}"
+        
+        # Set capacity based on ratio - ensure total capacity >= students
+        base_capacity = max(1, int(np.ceil(n_students * 1.2 / n_companies)))
+        company_info.append((name, industry, base_capacity, base_capacity))
     
     companies_df = pd.DataFrame(company_info, 
                                 columns=['company_name', 'industry', 'it2_capacity', 'it3_capacity'])
@@ -81,8 +95,8 @@ def generate_synthetic_data(n_students=15):
     
     return students_df, companies_df, rankings_df
 
-def create_excel_template():
-    """Create Excel template for data input"""
+def create_excel_template(n_students=20, n_companies=20):
+    """Create Excel template for data input with flexible size"""
     wb = openpyxl.Workbook()
     
     # Students sheet
@@ -96,10 +110,10 @@ def create_excel_template():
         ws_students[cell].font = Font(bold=True, color='FFFFFF')
         ws_students[cell].fill = PatternFill(start_color='366092', fill_type='solid')
     
-    for i in range(2, 17):
+    for i in range(2, n_students + 2):
         ws_students[f'A{i}'] = i-1
         ws_students[f'B{i}'] = f'Student_{i-1:02d}'
-        ws_students[f'C{i}'] = ''
+        ws_students[f'C{i}'] = 3.5  # Default GPA
     
     # Companies sheet
     ws_companies = wb.create_sheet("Companies")
@@ -110,12 +124,12 @@ def create_excel_template():
         cell.fill = PatternFill(start_color='366092', fill_type='solid')
     
     industries = ['General Insurance', 'Consultancy', 'Life Insurance', 'Care/Disability']
-    for i in range(2, 17):
+    for i in range(2, n_companies + 2):
         ws_companies.cell(i, 1, i-1)
         ws_companies.cell(i, 2, f'Company_{i-1:02d}')
         ws_companies.cell(i, 3, industries[(i-2) % 4])
-        ws_companies.cell(i, 4, 1)
-        ws_companies.cell(i, 5, 1)
+        ws_companies.cell(i, 4, 1)  # Default capacity
+        ws_companies.cell(i, 5, 1)  # Default capacity
     
     # Rankings sheet
     ws_rankings = wb.create_sheet("Rankings")
@@ -127,11 +141,21 @@ def create_excel_template():
         ws_rankings[cell].font = Font(bold=True, color='FFFFFF')
         ws_rankings[cell].fill = PatternFill(start_color='366092', fill_type='solid')
     
+    # Add instructions
     ws_rankings['E1'] = 'Instructions:'
-    ws_rankings['E2'] = '1. Fill in student GPAs in Students sheet'
-    ws_rankings['E3'] = '2. Update company names and industries in Companies sheet'
-    ws_rankings['E4'] = '3. Enter rankings (1-10, higher is better) for each student-company pair'
-    ws_rankings['E5'] = '4. Each student should rank all companies'
+    ws_rankings['E1'].font = Font(bold=True, size=12)
+    ws_rankings['E2'] = '1. Fill in student information in Students sheet'
+    ws_rankings['E3'] = '2. Fill in company information in Companies sheet'
+    ws_rankings['E4'] = '3. Enter rankings (1-10, higher is better) for EACH student-company pair'
+    ws_rankings['E5'] = '4. Rankings: Each row = one student ranking one company'
+    ws_rankings['E6'] = '5. Total rows needed = (# students) × (# companies)'
+    ws_rankings['E7'] = f'6. For this template: {n_students} students × {n_companies} companies = {n_students * n_companies} rankings'
+    ws_rankings['E9'] = 'Example rankings rows:'
+    ws_rankings['E10'] = 'student_id | company_id | ranking'
+    ws_rankings['E11'] = '1          | 1          | 8'
+    ws_rankings['E12'] = '1          | 2          | 5'
+    ws_rankings['E13'] = '1          | 3          | 9'
+    ws_rankings['E14'] = '...'
     
     buffer = BytesIO()
     wb.save(buffer)
@@ -149,20 +173,40 @@ def load_excel_data(file):
         return None, None, None, str(e)
 
 def validate_data(students_df, companies_df, rankings_df):
-    """Validate uploaded data"""
+    """Validate uploaded data - UPDATED for flexible numbers"""
     errors = []
+    warnings = []
     
-    if len(students_df) != len(companies_df):
-        errors.append(f"Number of students ({len(students_df)}) must equal number of companies ({len(companies_df)})")
+    n_students = len(students_df)
+    n_companies = len(companies_df)
     
-    expected_rankings = len(students_df) * len(companies_df)
+    # Check rankings completeness
+    expected_rankings = n_students * n_companies
     if len(rankings_df) != expected_rankings:
-        errors.append(f"Expected {expected_rankings} rankings, got {len(rankings_df)}")
+        errors.append(f"Expected {expected_rankings} rankings ({n_students} students × {n_companies} companies), got {len(rankings_df)}")
     
+    # Check ranking values
     if rankings_df['ranking'].min() < 1 or rankings_df['ranking'].max() > 10:
         errors.append("Rankings must be between 1 and 10")
     
-    return errors
+    # Check capacity
+    total_it2_capacity = companies_df['it2_capacity'].sum()
+    total_it3_capacity = companies_df['it3_capacity'].sum()
+    
+    if total_it2_capacity < n_students:
+        errors.append(f"Total IT2 capacity ({total_it2_capacity}) is less than number of students ({n_students})")
+    
+    if total_it3_capacity < n_students:
+        errors.append(f"Total IT3 capacity ({total_it3_capacity}) is less than number of students ({n_students})")
+    
+    # Warnings
+    if total_it2_capacity < n_students * 1.2:
+        warnings.append(f"IT2 capacity is tight. Consider increasing for better optimization.")
+    
+    if total_it3_capacity < n_students * 1.2:
+        warnings.append(f"IT3 capacity is tight. Consider increasing for better optimization.")
+    
+    return errors, warnings
 
 # PAGE 1: DATA SETUP
 if page == "Data Setup":
@@ -173,15 +217,21 @@ if page == "Data Setup":
     # Tab 1: Synthetic Data
     with tab1:
         st.header("Generate Synthetic Dataset")
-        st.write("Click the button below to generate a synthetic dataset with 15 students and 15 companies.")
+        st.write("Generate test data with custom numbers of students and companies.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            n_students = st.number_input("Number of Students", min_value=5, max_value=100, value=15, step=1)
+        with col2:
+            n_companies = st.number_input("Number of Companies", min_value=5, max_value=100, value=15, step=1)
         
         if st.button("Generate Synthetic Data", type="primary"):
-            students_df, companies_df, rankings_df = generate_synthetic_data()
+            students_df, companies_df, rankings_df = generate_synthetic_data(n_students, n_companies)
             st.session_state.students_df = students_df
             st.session_state.companies_df = companies_df
             st.session_state.rankings_df = rankings_df
             st.session_state.data_loaded = True
-            st.success("✅ Synthetic data generated successfully!")
+            st.success(f"✅ Generated: {n_students} students, {n_companies} companies, {len(rankings_df)} rankings")
         
         if st.session_state.data_loaded:
             st.subheader("Preview Data")
@@ -199,9 +249,7 @@ if page == "Data Setup":
     # Tab 2: Manual Input
     with tab2:
         st.header("Manual Data Input")
-        st.warning("⚠️ Manual input is for demonstration. For 15 students × 15 companies = 225 rankings, use Excel upload instead.")
-        
-        st.write("**Note:** This simplified form allows you to set a few rankings. Use Excel for complete data entry.")
+        st.warning("⚠️ For large datasets, use Excel upload instead.")
         
         if st.session_state.data_loaded:
             st.write("### Edit Rankings")
@@ -221,15 +269,25 @@ if page == "Data Setup":
     with tab3:
         st.header("Excel Data Upload")
         
-        # Download template
+        # Template generator
         st.subheader("Step 1: Download Template")
-        template_buffer = create_excel_template()
+        st.write("Customize template size based on your needs:")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            template_students = st.number_input("Students in template", min_value=5, max_value=200, value=20, step=5)
+        with col2:
+            template_companies = st.number_input("Companies in template", min_value=5, max_value=200, value=20, step=5)
+        
+        template_buffer = create_excel_template(template_students, template_companies)
         st.download_button(
-            label="📥 Download Excel Template",
+            label=f"📥 Download Excel Template ({template_students} students × {template_companies} companies)",
             data=template_buffer,
-            file_name="coop_placement_template.xlsx",
+            file_name=f"coop_placement_template_{template_students}x{template_companies}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+        
+        st.info(f"💡 This template has {template_students} students and {template_companies} companies. You can add/remove rows as needed in Excel.")
         
         # Upload file
         st.subheader("Step 2: Upload Completed File")
@@ -241,13 +299,18 @@ if page == "Data Setup":
             if error:
                 st.error(f"❌ Error loading file: {error}")
             else:
-                errors = validate_data(students_df, companies_df, rankings_df)
+                errors, warnings = validate_data(students_df, companies_df, rankings_df)
                 
                 if errors:
                     st.error("❌ Data validation failed:")
                     for err in errors:
                         st.write(f"- {err}")
                 else:
+                    if warnings:
+                        st.warning("⚠️ Warnings:")
+                        for warn in warnings:
+                            st.write(f"- {warn}")
+                    
                     st.session_state.students_df = students_df
                     st.session_state.companies_df = companies_df
                     st.session_state.rankings_df = rankings_df
@@ -319,22 +382,25 @@ elif page == "Exploratory Analysis":
         avg_rankings = avg_rankings.merge(companies_df[['company_id', 'company_name', 'industry']], on='company_id')
         avg_rankings = avg_rankings.sort_values('ranking', ascending=False)
         
-        fig = px.bar(avg_rankings, x='company_name', y='ranking', color='industry',
-                    title="Average Ranking by Company",
+        fig = px.bar(avg_rankings.head(20), x='company_name', y='ranking', color='industry',
+                    title="Top 20 Companies by Average Ranking",
                     labels={'ranking': 'Average Ranking', 'company_name': 'Company'})
         fig.update_xaxes(tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
         
-        # Heatmap of rankings
+        # Heatmap of rankings (sample if too large)
         st.header("Student-Company Ranking Heatmap")
-        pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
-        
-        fig = px.imshow(pivot_rankings, 
-                       labels=dict(x="Company ID", y="Student ID", color="Ranking"),
-                       title="Student Preferences Heatmap",
-                       aspect="auto",
-                       color_continuous_scale='RdYlGn')
-        st.plotly_chart(fig, use_container_width=True)
+        if len(students_df) <= 30 and len(companies_df) <= 30:
+            pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
+            
+            fig = px.imshow(pivot_rankings, 
+                           labels=dict(x="Company ID", y="Student ID", color="Ranking"),
+                           title="Student Preferences Heatmap",
+                           aspect="auto",
+                           color_continuous_scale='RdYlGn')
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info(f"Heatmap hidden for large datasets ({len(students_df)} students × {len(companies_df)} companies). Use filtering or sampling if needed.")
 
 # PAGE 3: CLUSTERING
 elif page == "Clustering":
@@ -350,6 +416,9 @@ elif page == "Clustering":
         
         students_df = st.session_state.students_df
         rankings_df = st.session_state.rankings_df
+        
+        if len(students_df) > 100:
+            st.warning("⚠️ Clustering may be slow for large datasets (>100 students)")
         
         # Create distance matrix
         pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
@@ -390,7 +459,8 @@ elif page == "Clustering":
         
         # Select number of clusters
         st.header("Cluster Assignment")
-        n_clusters = st.slider("Select Number of Clusters", 2, 10, 3)
+        max_clusters = min(10, len(students_df) - 1)
+        n_clusters = st.slider("Select Number of Clusters", 2, max_clusters, min(3, max_clusters))
         
         # Get cluster assignments
         clusters = fcluster(Z, n_clusters, criterion='maxclust')
@@ -444,6 +514,16 @@ elif page == "Optimization":
         students_df = st.session_state.students_df
         companies_df = st.session_state.companies_df
         rankings_df = st.session_state.rankings_df
+        
+        # Show problem size
+        n_students = len(students_df)
+        n_companies = len(companies_df)
+        n_variables = n_students * n_companies * 2
+        
+        st.info(f"**Problem Size:** {n_students} students × {n_companies} companies = {n_variables} decision variables")
+        
+        if n_variables > 10000:
+            st.warning("⚠️ Large problem size. Optimization may take several minutes.")
         
         if st.button("🚀 Solve Optimization Problem", type="primary"):
             with st.spinner("Solving optimization problem..."):
@@ -603,11 +683,19 @@ elif page == "Optimization":
                     )
                 else:
                     st.error("❌ Optimization failed to find a solution. Check constraints.")
+                    st.write("**Possible issues:**")
+                    st.write("- Total company capacity < Number of students")
+                    st.write("- Infeasible industry diversity constraints")
+                    st.write("- Check your data for inconsistencies")
 
 # Footer
 st.sidebar.markdown("---")
-st.sidebar.info("""
+st.sidebar.info(f"""
 **Co-op Placement Optimizer**  
-Version 1.0  
+Version 2.0 - Flexible Size
 Built with Streamlit & PuLP
+
+Current Data:
+- Students: {len(st.session_state.students_df) if st.session_state.data_loaded else 0}
+- Companies: {len(st.session_state.companies_df) if st.session_state.data_loaded else 0}
 """)
