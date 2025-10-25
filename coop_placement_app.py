@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
-from scipy.spatial.distance import squareform
+from scipy.spatial.distance import squareform, pdist, cdist
 import pulp
 from io import BytesIO
 import openpyxl
@@ -667,32 +667,45 @@ elif page == "Exploratory Analysis":
         with col4:
             st.metric("Total IT2 Capacity", companies_df['it2_capacity'].sum())
         
-        # NEW: Student Similarity Analysis
+        # NEW: Student Similarity Analysis - EXACT MATCHING
         st.header("Student Preference Similarity Analysis")
-        st.write("Students with similar rankings have similar preferences for companies.")
+        st.write("Find students who chose the same companies with the same rankings.")
         
         # Create pivot table of rankings
         pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
         
-        # Calculate correlation matrix (similarity between students)
-        student_similarity = pivot_rankings.T.corr()
+        # Calculate similarity based on exact matching
+        # Similarity = 1 - (average absolute difference / max possible difference)
         
-        # Map student IDs to names for display
+        # Use Manhattan distance (sum of absolute differences) normalized
+        n_companies = len(pivot_rankings.columns)
+        max_distance = n_companies * 9  # Max difference: all companies differ by 9 (range 1-10)
+        
+        # Calculate pairwise Manhattan distances
+        distances = cdist(pivot_rankings, pivot_rankings, metric='cityblock')
+        
+        # Convert to similarity (0 to 1, where 1 = identical)
+        student_similarity = 1 - (distances / max_distance)
+        
+        # Convert to DataFrame with student names
         student_names_dict = students_df.set_index('student_id')['student_name'].to_dict()
-        student_similarity.index = student_similarity.index.map(student_names_dict)
-        student_similarity.columns = student_similarity.columns.map(student_names_dict)
+        student_similarity_df = pd.DataFrame(
+            student_similarity,
+            index=pivot_rankings.index.map(student_names_dict),
+            columns=pivot_rankings.index.map(student_names_dict)
+        )
         
         col1, col2 = st.columns(2)
         
         with col1:
             # Similarity Heatmap
             if len(students_df) <= 30:
-                fig = px.imshow(student_similarity, 
+                fig = px.imshow(student_similarity_df, 
                                labels=dict(x="Student", y="Student", color="Similarity"),
-                               title="Student Preference Similarity Matrix",
+                               title="Student Preference Similarity Matrix<br><sub>1.0 = Identical rankings, 0.0 = Completely different</sub>",
                                aspect="auto",
                                color_continuous_scale='RdYlGn',
-                               zmin=-1, zmax=1)
+                               zmin=0, zmax=1)
                 fig.update_xaxes(tickangle=-45)
                 fig.update_yaxes(tickangle=0)
                 st.plotly_chart(fig, use_container_width=True)
@@ -703,55 +716,114 @@ elif page == "Exploratory Analysis":
             # Top Similar Student Pairs
             st.subheader("Most Similar Students")
             
-            # Get upper triangle of correlation matrix (avoid duplicates)
+            # Get upper triangle of similarity matrix (avoid duplicates)
             similarity_pairs = []
-            for i in range(len(student_similarity)):
-                for j in range(i+1, len(student_similarity)):
+            for i in range(len(student_similarity_df)):
+                for j in range(i+1, len(student_similarity_df)):
                     similarity_pairs.append({
-                        'Student 1': student_similarity.index[i],
-                        'Student 2': student_similarity.columns[j],
-                        'Similarity': student_similarity.iloc[i, j]
+                        'Student 1': student_similarity_df.index[i],
+                        'Student 2': student_similarity_df.columns[j],
+                        'Similarity': student_similarity_df.iloc[i, j],
+                        'Match %': f"{student_similarity_df.iloc[i, j] * 100:.1f}%"
                     })
             
             if similarity_pairs:
                 similarity_df = pd.DataFrame(similarity_pairs)
                 similarity_df = similarity_df.sort_values('Similarity', ascending=False).head(10)
-                similarity_df['Similarity'] = similarity_df['Similarity'].round(3)
                 
-                st.dataframe(similarity_df, hide_index=True, height=350)
-                st.caption("Similarity ranges from -1 (opposite preferences) to 1 (identical preferences)")
+                # Calculate average absolute difference for context
+                similarity_df['Avg Diff'] = similarity_df['Similarity'].apply(
+                    lambda x: f"{(1-x) * 9:.1f}"
+                )
+                
+                st.dataframe(similarity_df[['Student 1', 'Student 2', 'Match %', 'Avg Diff']], 
+                           hide_index=True, height=350)
+                st.caption("Match % = Percentage of identical rankings | Avg Diff = Average ranking difference")
+        
+        # Detailed comparison for top pair
+        if similarity_pairs:
+            st.subheader("Detailed Comparison: Most Similar Pair")
+            top_pair = similarity_df.iloc[0]
+            student1_name = top_pair['Student 1']
+            student2_name = top_pair['Student 2']
+            
+            # Get their student IDs
+            student1_id = students_df[students_df['student_name'] == student1_name]['student_id'].values[0]
+            student2_id = students_df[students_df['student_name'] == student2_name]['student_id'].values[0]
+            
+            # Get their rankings
+            student1_rankings = rankings_df[rankings_df['student_id'] == student1_id].merge(
+                companies_df[['company_id', 'company_name']], on='company_id'
+            )[['company_name', 'ranking']].rename(columns={'ranking': student1_name})
+            
+            student2_rankings = rankings_df[rankings_df['student_id'] == student2_id].merge(
+                companies_df[['company_id', 'company_name']], on='company_id'
+            )[['company_name', 'ranking']].rename(columns={'ranking': student2_name})
+            
+            # Merge and calculate difference
+            comparison = student1_rankings.merge(student2_rankings, on='company_name')
+            comparison['Difference'] = abs(comparison[student1_name] - comparison[student2_name])
+            comparison['Match'] = comparison['Difference'].apply(lambda x: '✅' if x == 0 else ('🟡' if x <= 2 else '❌'))
+            
+            # Sort by companies where they agree most
+            comparison = comparison.sort_values('Difference')
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.dataframe(comparison, hide_index=True, height=400, use_container_width=True)
+            
+            with col2:
+                exact_matches = (comparison['Difference'] == 0).sum()
+                close_matches = ((comparison['Difference'] > 0) & (comparison['Difference'] <= 2)).sum()
+                different = (comparison['Difference'] > 2).sum()
+                
+                st.metric("Exact Matches", f"{exact_matches} / {len(comparison)}")
+                st.metric("Close Matches (±1-2)", close_matches)
+                st.metric("Very Different (>2)", different)
         
         # Similarity distribution
         st.subheader("Preference Similarity Distribution")
         
         # Get all pairwise similarities (upper triangle only)
         upper_triangle = []
-        for i in range(len(student_similarity)):
-            for j in range(i+1, len(student_similarity)):
-                upper_triangle.append(student_similarity.iloc[i, j])
+        for i in range(len(student_similarity_df)):
+            for j in range(i+1, len(student_similarity_df)):
+                upper_triangle.append(student_similarity_df.iloc[i, j])
         
-        fig = px.histogram(x=upper_triangle, nbins=30,
+        fig = px.histogram(x=upper_triangle, nbins=20,
                           title="Distribution of Student Preference Similarities",
-                          labels={'x': 'Similarity Score', 'count': 'Number of Student Pairs'})
+                          labels={'x': 'Similarity Score (1.0 = Identical)', 'count': 'Number of Student Pairs'})
         fig.update_layout(showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         
+        # Interpretation guide
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            high_sim = sum(1 for x in upper_triangle if x >= 0.8)
+            st.metric("High Similarity Pairs", high_sim, help="Similarity ≥ 0.8 (rankings differ by ≤2 on average)")
+        with col2:
+            med_sim = sum(1 for x in upper_triangle if 0.5 <= x < 0.8)
+            st.metric("Medium Similarity Pairs", med_sim, help="0.5 ≤ Similarity < 0.8")
+        with col3:
+            low_sim = sum(1 for x in upper_triangle if x < 0.5)
+            st.metric("Low Similarity Pairs", low_sim, help="Similarity < 0.5 (very different preferences)")
+        
         # Student groups by similarity
         st.subheader("Student Preference Groups")
-        st.write("Students grouped by how similar their company preferences are:")
+        st.write("Students grouped by how closely their rankings match:")
         
-        # Simple grouping based on average similarity
-        avg_similarity = student_similarity.mean(axis=1).sort_values(ascending=False)
+        # Calculate average similarity for each student
+        avg_similarity = student_similarity_df.mean(axis=1).sort_values(ascending=False)
         
         group_data = []
         for student_name in avg_similarity.index[:min(15, len(students_df))]:
             # Find most similar students to this one
-            similar_students = student_similarity[student_name].sort_values(ascending=False)[1:4]  # Top 3 (excluding self)
-            similar_names = [f"{name} ({sim:.2f})" for name, sim in similar_students.items()]
+            similar_students = student_similarity_df[student_name].sort_values(ascending=False)[1:4]  # Top 3 (excluding self)
+            similar_names = [f"{name} ({sim*100:.0f}%)" for name, sim in similar_students.items()]
             
             group_data.append({
                 'Student': student_name,
-                'Avg Similarity': f"{avg_similarity[student_name]:.3f}",
+                'Avg Match %': f"{avg_similarity[student_name] * 100:.1f}%",
                 'Most Similar To': ", ".join(similar_names)
             })
         
