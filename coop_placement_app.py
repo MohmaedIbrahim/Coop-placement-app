@@ -816,30 +816,6 @@ elif page == "Exploratory Analysis":
                     labels={'ranking': 'Average Ranking', 'company_name': 'Company'})
         fig.update_xaxes(tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
-        
-        # Heatmap - UPDATED WITH NAMES INSTEAD OF IDs
-        st.header("Student-Company Ranking Heatmap")
-        if len(students_df) <= 30 and len(companies_df) <= 30:
-            # Create pivot with IDs first
-            pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
-            
-            # Map IDs to names
-            student_names = students_df.set_index('student_id')['student_name'].to_dict()
-            company_names = companies_df.set_index('company_id')['company_name'].to_dict()
-            
-            # Rename index and columns
-            pivot_rankings.index = pivot_rankings.index.map(student_names)
-            pivot_rankings.columns = pivot_rankings.columns.map(company_names)
-            
-            fig = px.imshow(pivot_rankings, 
-                           labels=dict(x="Company Name", y="Student Name", color="Ranking"),
-                           title="Student Preferences Heatmap",
-                           aspect="auto",
-                           color_continuous_scale='RdYlGn')
-            fig.update_xaxes(tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info(f"Heatmap hidden for large datasets ({len(students_df)} students × {len(companies_df)} companies).")
 
 # PAGE 4: CLUSTERING - UPDATED WITH NAMES INSTEAD OF IDs
 elif page == "Clustering":
