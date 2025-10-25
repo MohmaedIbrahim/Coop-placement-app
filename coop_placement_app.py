@@ -4,7 +4,6 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
-from scipy.spatial.distance import squareform, pdist, cdist
 import pulp
 from io import BytesIO
 import openpyxl
@@ -667,168 +666,139 @@ elif page == "Exploratory Analysis":
         with col4:
             st.metric("Total IT2 Capacity", companies_df['it2_capacity'].sum())
         
-        # NEW: Student Similarity Analysis - EXACT MATCHING
-        st.header("Student Preference Similarity Analysis")
-        st.write("Find students who chose the same companies with the same rankings.")
+        # Student Ranking Matches - Simple View
+        st.header("Students with Matching Rankings")
+        st.write("See which students gave the same rankings to the same companies.")
         
-        # Create pivot table of rankings
-        pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
+        # For each company, show which students gave it the same rank
+        st.subheader("1. Students Who Ranked Companies Identically")
         
-        # Calculate similarity based on exact matching
-        # Similarity = 1 - (average absolute difference / max possible difference)
-        
-        # Use Manhattan distance (sum of absolute differences) normalized
-        n_companies = len(pivot_rankings.columns)
-        max_distance = n_companies * 9  # Max difference: all companies differ by 9 (range 1-10)
-        
-        # Calculate pairwise Manhattan distances
-        distances = cdist(pivot_rankings, pivot_rankings, metric='cityblock')
-        
-        # Convert to similarity (0 to 1, where 1 = identical)
-        student_similarity = 1 - (distances / max_distance)
-        
-        # Convert to DataFrame with student names
+        # Group by company and ranking to find matches
+        company_names_dict = companies_df.set_index('company_id')['company_name'].to_dict()
         student_names_dict = students_df.set_index('student_id')['student_name'].to_dict()
-        student_similarity_df = pd.DataFrame(
-            student_similarity,
-            index=pivot_rankings.index.map(student_names_dict),
-            columns=pivot_rankings.index.map(student_names_dict)
-        )
         
-        col1, col2 = st.columns(2)
+        # Add names to rankings
+        rankings_with_names = rankings_df.copy()
+        rankings_with_names['company_name'] = rankings_with_names['company_id'].map(company_names_dict)
+        rankings_with_names['student_name'] = rankings_with_names['student_id'].map(student_names_dict)
         
-        with col1:
-            # Similarity Heatmap
-            if len(students_df) <= 30:
-                fig = px.imshow(student_similarity_df, 
-                               labels=dict(x="Student", y="Student", color="Similarity"),
-                               title="Student Preference Similarity Matrix<br><sub>1.0 = Identical rankings, 0.0 = Completely different</sub>",
-                               aspect="auto",
-                               color_continuous_scale='RdYlGn',
-                               zmin=0, zmax=1)
-                fig.update_xaxes(tickangle=-45)
-                fig.update_yaxes(tickangle=0)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info(f"Similarity matrix hidden for large datasets ({len(students_df)} students)")
-        
-        with col2:
-            # Top Similar Student Pairs
-            st.subheader("Most Similar Students")
+        # Find matches: students who gave the same rank to the same company
+        matching_groups = []
+        for company_id in companies_df['company_id']:
+            company_name = company_names_dict[company_id]
+            company_rankings = rankings_with_names[rankings_with_names['company_id'] == company_id]
             
-            # Get upper triangle of similarity matrix (avoid duplicates)
-            similarity_pairs = []
-            for i in range(len(student_similarity_df)):
-                for j in range(i+1, len(student_similarity_df)):
-                    similarity_pairs.append({
-                        'Student 1': student_similarity_df.index[i],
-                        'Student 2': student_similarity_df.columns[j],
-                        'Similarity': student_similarity_df.iloc[i, j],
-                        'Match %': f"{student_similarity_df.iloc[i, j] * 100:.1f}%"
+            # Group by ranking value
+            for rank_value in sorted(company_rankings['ranking'].unique()):
+                students_with_rank = company_rankings[company_rankings['ranking'] == rank_value]['student_name'].tolist()
+                if len(students_with_rank) > 1:  # Only show if 2+ students match
+                    matching_groups.append({
+                        'Company': company_name,
+                        'Ranking': rank_value,
+                        'Number of Students': len(students_with_rank),
+                        'Students': ', '.join(students_with_rank)
                     })
-            
-            if similarity_pairs:
-                similarity_df = pd.DataFrame(similarity_pairs)
-                similarity_df = similarity_df.sort_values('Similarity', ascending=False).head(10)
-                
-                # Calculate average absolute difference for context
-                similarity_df['Avg Diff'] = similarity_df['Similarity'].apply(
-                    lambda x: f"{(1-x) * 9:.1f}"
-                )
-                
-                st.dataframe(similarity_df[['Student 1', 'Student 2', 'Match %', 'Avg Diff']], 
-                           hide_index=True, height=350)
-                st.caption("Match % = Percentage of identical rankings | Avg Diff = Average ranking difference")
         
-        # Detailed comparison for top pair
-        if similarity_pairs:
-            st.subheader("Detailed Comparison: Most Similar Pair")
-            top_pair = similarity_df.iloc[0]
-            student1_name = top_pair['Student 1']
-            student2_name = top_pair['Student 2']
+        if matching_groups:
+            matches_df = pd.DataFrame(matching_groups)
+            matches_df = matches_df.sort_values(['Company', 'Ranking'])
             
-            # Get their student IDs
-            student1_id = students_df[students_df['student_name'] == student1_name]['student_id'].values[0]
-            student2_id = students_df[students_df['student_name'] == student2_name]['student_id'].values[0]
+            # Show table
+            st.dataframe(matches_df, hide_index=True, use_container_width=True, height=400)
             
-            # Get their rankings
-            student1_rankings = rankings_df[rankings_df['student_id'] == student1_id].merge(
-                companies_df[['company_id', 'company_name']], on='company_id'
-            )[['company_name', 'ranking']].rename(columns={'ranking': student1_name})
-            
-            student2_rankings = rankings_df[rankings_df['student_id'] == student2_id].merge(
-                companies_df[['company_id', 'company_name']], on='company_id'
-            )[['company_name', 'ranking']].rename(columns={'ranking': student2_name})
-            
-            # Merge and calculate difference
-            comparison = student1_rankings.merge(student2_rankings, on='company_name')
-            comparison['Difference'] = abs(comparison[student1_name] - comparison[student2_name])
-            comparison['Match'] = comparison['Difference'].apply(lambda x: '✅' if x == 0 else ('🟡' if x <= 2 else '❌'))
-            
-            # Sort by companies where they agree most
-            comparison = comparison.sort_values('Difference')
-            
-            col1, col2 = st.columns([2, 1])
+            # Summary metrics
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.dataframe(comparison, hide_index=True, height=400, use_container_width=True)
-            
+                st.metric("Total Matching Groups", len(matches_df))
             with col2:
-                exact_matches = (comparison['Difference'] == 0).sum()
-                close_matches = ((comparison['Difference'] > 0) & (comparison['Difference'] <= 2)).sum()
-                different = (comparison['Difference'] > 2).sum()
-                
-                st.metric("Exact Matches", f"{exact_matches} / {len(comparison)}")
-                st.metric("Close Matches (±1-2)", close_matches)
-                st.metric("Very Different (>2)", different)
+                avg_group_size = matches_df['Number of Students'].mean()
+                st.metric("Avg Group Size", f"{avg_group_size:.1f}")
+            with col3:
+                max_group = matches_df['Number of Students'].max()
+                st.metric("Largest Agreement", f"{max_group} students")
+        else:
+            st.info("No students gave the same ranking to the same company.")
         
-        # Similarity distribution
-        st.subheader("Preference Similarity Distribution")
+        # Visualization: Companies with most agreement
+        st.subheader("2. Companies with Most Student Agreement")
         
-        # Get all pairwise similarities (upper triangle only)
-        upper_triangle = []
-        for i in range(len(student_similarity_df)):
-            for j in range(i+1, len(student_similarity_df)):
-                upper_triangle.append(student_similarity_df.iloc[i, j])
-        
-        fig = px.histogram(x=upper_triangle, nbins=20,
-                          title="Distribution of Student Preference Similarities",
-                          labels={'x': 'Similarity Score (1.0 = Identical)', 'count': 'Number of Student Pairs'})
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Interpretation guide
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            high_sim = sum(1 for x in upper_triangle if x >= 0.8)
-            st.metric("High Similarity Pairs", high_sim, help="Similarity ≥ 0.8 (rankings differ by ≤2 on average)")
-        with col2:
-            med_sim = sum(1 for x in upper_triangle if 0.5 <= x < 0.8)
-            st.metric("Medium Similarity Pairs", med_sim, help="0.5 ≤ Similarity < 0.8")
-        with col3:
-            low_sim = sum(1 for x in upper_triangle if x < 0.5)
-            st.metric("Low Similarity Pairs", low_sim, help="Similarity < 0.5 (very different preferences)")
-        
-        # Student groups by similarity
-        st.subheader("Student Preference Groups")
-        st.write("Students grouped by how closely their rankings match:")
-        
-        # Calculate average similarity for each student
-        avg_similarity = student_similarity_df.mean(axis=1).sort_values(ascending=False)
-        
-        group_data = []
-        for student_name in avg_similarity.index[:min(15, len(students_df))]:
-            # Find most similar students to this one
-            similar_students = student_similarity_df[student_name].sort_values(ascending=False)[1:4]  # Top 3 (excluding self)
-            similar_names = [f"{name} ({sim*100:.0f}%)" for name, sim in similar_students.items()]
+        if matching_groups:
+            # Count how many matching groups each company has
+            company_agreement = matches_df.groupby('Company')['Number of Students'].agg(['sum', 'count']).reset_index()
+            company_agreement.columns = ['Company', 'Total Students in Matches', 'Number of Match Groups']
+            company_agreement = company_agreement.sort_values('Total Students in Matches', ascending=False).head(15)
             
-            group_data.append({
-                'Student': student_name,
-                'Avg Match %': f"{avg_similarity[student_name] * 100:.1f}%",
-                'Most Similar To': ", ".join(similar_names)
-            })
+            fig = px.bar(company_agreement, x='Company', y='Total Students in Matches',
+                        title="Top 15 Companies by Student Agreement",
+                        labels={'Total Students in Matches': 'Students with Matching Ranks'},
+                        color='Number of Match Groups',
+                        color_continuous_scale='Viridis')
+            fig.update_xaxes(tickangle=-45)
+            st.plotly_chart(fig, use_container_width=True)
         
-        group_df = pd.DataFrame(group_data)
-        st.dataframe(group_df, hide_index=True, use_container_width=True, height=400)
+        # Perfect matches: students who ranked many companies identically
+        st.subheader("3. Students with Most Identical Rankings")
+        
+        # For each pair of students, count how many companies they ranked identically
+        perfect_matches = []
+        student_ids = students_df['student_id'].tolist()
+        
+        for i, student1_id in enumerate(student_ids):
+            for student2_id in student_ids[i+1:]:
+                # Get rankings for both students
+                student1_rankings = rankings_df[rankings_df['student_id'] == student1_id].set_index('company_id')['ranking']
+                student2_rankings = rankings_df[rankings_df['student_id'] == student2_id].set_index('company_id')['ranking']
+                
+                # Count exact matches
+                exact_matches = (student1_rankings == student2_rankings).sum()
+                
+                if exact_matches > 0:
+                    student1_name = student_names_dict[student1_id]
+                    student2_name = student_names_dict[student2_id]
+                    
+                    # Find which companies they agreed on
+                    matching_companies = []
+                    for company_id in companies_df['company_id']:
+                        if student1_rankings.get(company_id) == student2_rankings.get(company_id):
+                            matching_companies.append(company_names_dict[company_id])
+                    
+                    perfect_matches.append({
+                        'Student 1': student1_name,
+                        'Student 2': student2_name,
+                        'Identical Rankings': exact_matches,
+                        'Total Companies': len(companies_df),
+                        'Match %': f"{(exact_matches / len(companies_df)) * 100:.1f}%",
+                        'Companies They Agreed On': ', '.join(matching_companies[:5]) + ('...' if len(matching_companies) > 5 else '')
+                    })
+        
+        if perfect_matches:
+            perfect_df = pd.DataFrame(perfect_matches)
+            perfect_df = perfect_df.sort_values('Identical Rankings', ascending=False).head(20)
+            
+            st.dataframe(perfect_df, hide_index=True, use_container_width=True, height=400)
+            
+            # Visualization: Distribution of identical rankings
+            st.subheader("4. Distribution of Identical Rankings Between Students")
+            
+            fig = px.histogram(perfect_df, x='Identical Rankings', nbins=20,
+                              title="How Many Companies Do Student Pairs Rank Identically?",
+                              labels={'Identical Rankings': 'Number of Companies with Same Ranking', 
+                                     'count': 'Number of Student Pairs'})
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Summary stats
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                max_match = perfect_df['Identical Rankings'].max()
+                st.metric("Most Identical Rankings", f"{max_match} companies")
+            with col2:
+                avg_match = perfect_df['Identical Rankings'].mean()
+                st.metric("Average Identical Rankings", f"{avg_match:.1f}")
+            with col3:
+                high_match_pairs = (perfect_df['Identical Rankings'] >= len(companies_df) * 0.5).sum()
+                st.metric("Pairs with 50%+ Match", high_match_pairs)
+        else:
+            st.info("No students ranked any companies identically.")
         
         # NEW: Capacity Analysis
         st.header("Company Capacity Analysis")
