@@ -503,8 +503,8 @@ elif page == "Manual Data Editor":
             if st.session_state.rankings_df is None or len(st.session_state.rankings_df) == 0:
                 st.session_state.rankings_df = regenerate_rankings(st.session_state.students_df, st.session_state.companies_df)
             
-            # Quick edit interface
-            st.subheader("✏️ Edit Rankings")
+            # Quick edit interface with auto-save dropdowns
+            st.subheader("✏️ Edit Rankings - Auto-Save")
             
             # Select student
             student_names = st.session_state.students_df.set_index('student_id')['student_name'].to_dict()
@@ -516,43 +516,46 @@ elif page == "Manual Data Editor":
                 format_func=lambda x: f"{x} - {student_names[x]}"
             )
             
-            st.write("**Rank all companies for this student:**")
+            st.write("**Rank all companies for this student (changes save automatically):**")
             
-            # Get rankings for selected student
+            # Get current rankings for selected student
             student_rankings = st.session_state.rankings_df[
                 st.session_state.rankings_df['student_id'] == selected_student_id
             ].copy()
             
-            # Create editable view
-            student_rankings['company_name'] = student_rankings['company_id'].map(company_names)
-            student_rankings = student_rankings[['company_id', 'company_name', 'ranking']]
+            # Create dropdown for each company
+            ranking_options = list(range(1, 11))  # 1-10
             
-            edited_rankings = st.data_editor(
-                student_rankings,
-                use_container_width=True,
-                column_config={
-                    "company_id": st.column_config.NumberColumn("ID", disabled=True),
-                    "company_name": st.column_config.TextColumn("Company", disabled=True),
-                    "ranking": st.column_config.NumberColumn(
-                        "Ranking (1-10)",
-                        min_value=1,
-                        max_value=10,
-                        step=1,
-                        help="1=Least preferred, 10=Most preferred"
+            # Display in a nice grid format
+            st.write("")  # spacing
+            
+            for idx, row in student_rankings.iterrows():
+                company_id = row['company_id']
+                company_name = company_names[company_id]
+                current_ranking = int(row['ranking'])
+                
+                # Create columns for layout
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.write(f"**{company_name}**")
+                
+                with col2:
+                    # Dropdown with auto-save
+                    new_ranking = st.selectbox(
+                        "Rank",
+                        options=ranking_options,
+                        index=ranking_options.index(current_ranking),
+                        key=f"rank_{selected_student_id}_{company_id}",
+                        label_visibility="collapsed"
                     )
-                },
-                hide_index=True,
-                key=f"rankings_editor_{selected_student_id}"
-            )
-            
-            if st.button("💾 Save Rankings for This Student"):
-                # Update rankings in main dataframe
-                for _, row in edited_rankings.iterrows():
-                    mask = (st.session_state.rankings_df['student_id'] == selected_student_id) & \
-                           (st.session_state.rankings_df['company_id'] == row['company_id'])
-                    st.session_state.rankings_df.loc[mask, 'ranking'] = row['ranking']
-                st.success(f"✅ Updated rankings for {student_names[selected_student_id]}")
-                st.rerun()
+                    
+                    # Auto-save if changed
+                    if new_ranking != current_ranking:
+                        mask = (st.session_state.rankings_df['student_id'] == selected_student_id) & \
+                               (st.session_state.rankings_df['company_id'] == company_id)
+                        st.session_state.rankings_df.loc[mask, 'ranking'] = new_ranking
+                        st.rerun()
             
             # Show all rankings table
             st.subheader("📊 All Rankings (View)")
@@ -671,7 +674,7 @@ elif page == "Exploratory Analysis":
         st.write("See which students gave the same rankings to the same companies.")
         
         # For each company, show which students gave it the same rank
-        st.subheader("1. Students Who Ranked Companies Identically")
+        st.subheader("Students Who Ranked Companies Identically")
         
         # Group by company and ranking to find matches
         company_names_dict = companies_df.set_index('company_id')['company_name'].to_dict()
@@ -718,87 +721,6 @@ elif page == "Exploratory Analysis":
                 st.metric("Largest Agreement", f"{max_group} students")
         else:
             st.info("No students gave the same ranking to the same company.")
-        
-        # Visualization: Companies with most agreement
-        st.subheader("2. Companies with Most Student Agreement")
-        
-        if matching_groups:
-            # Count how many matching groups each company has
-            company_agreement = matches_df.groupby('Company')['Number of Students'].agg(['sum', 'count']).reset_index()
-            company_agreement.columns = ['Company', 'Total Students in Matches', 'Number of Match Groups']
-            company_agreement = company_agreement.sort_values('Total Students in Matches', ascending=False).head(15)
-            
-            fig = px.bar(company_agreement, x='Company', y='Total Students in Matches',
-                        title="Top 15 Companies by Student Agreement",
-                        labels={'Total Students in Matches': 'Students with Matching Ranks'},
-                        color='Number of Match Groups',
-                        color_continuous_scale='Viridis')
-            fig.update_xaxes(tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Perfect matches: students who ranked many companies identically
-        st.subheader("3. Students with Most Identical Rankings")
-        
-        # For each pair of students, count how many companies they ranked identically
-        perfect_matches = []
-        student_ids = students_df['student_id'].tolist()
-        
-        for i, student1_id in enumerate(student_ids):
-            for student2_id in student_ids[i+1:]:
-                # Get rankings for both students
-                student1_rankings = rankings_df[rankings_df['student_id'] == student1_id].set_index('company_id')['ranking']
-                student2_rankings = rankings_df[rankings_df['student_id'] == student2_id].set_index('company_id')['ranking']
-                
-                # Count exact matches
-                exact_matches = (student1_rankings == student2_rankings).sum()
-                
-                if exact_matches > 0:
-                    student1_name = student_names_dict[student1_id]
-                    student2_name = student_names_dict[student2_id]
-                    
-                    # Find which companies they agreed on
-                    matching_companies = []
-                    for company_id in companies_df['company_id']:
-                        if student1_rankings.get(company_id) == student2_rankings.get(company_id):
-                            matching_companies.append(company_names_dict[company_id])
-                    
-                    perfect_matches.append({
-                        'Student 1': student1_name,
-                        'Student 2': student2_name,
-                        'Identical Rankings': exact_matches,
-                        'Total Companies': len(companies_df),
-                        'Match %': f"{(exact_matches / len(companies_df)) * 100:.1f}%",
-                        'Companies They Agreed On': ', '.join(matching_companies[:5]) + ('...' if len(matching_companies) > 5 else '')
-                    })
-        
-        if perfect_matches:
-            perfect_df = pd.DataFrame(perfect_matches)
-            perfect_df = perfect_df.sort_values('Identical Rankings', ascending=False).head(20)
-            
-            st.dataframe(perfect_df, hide_index=True, use_container_width=True, height=400)
-            
-            # Visualization: Distribution of identical rankings
-            st.subheader("4. Distribution of Identical Rankings Between Students")
-            
-            fig = px.histogram(perfect_df, x='Identical Rankings', nbins=20,
-                              title="How Many Companies Do Student Pairs Rank Identically?",
-                              labels={'Identical Rankings': 'Number of Companies with Same Ranking', 
-                                     'count': 'Number of Student Pairs'})
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Summary stats
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                max_match = perfect_df['Identical Rankings'].max()
-                st.metric("Most Identical Rankings", f"{max_match} companies")
-            with col2:
-                avg_match = perfect_df['Identical Rankings'].mean()
-                st.metric("Average Identical Rankings", f"{avg_match:.1f}")
-            with col3:
-                high_match_pairs = (perfect_df['Identical Rankings'] >= len(companies_df) * 0.5).sum()
-                st.metric("Pairs with 50%+ Match", high_match_pairs)
-        else:
-            st.info("No students ranked any companies identically.")
         
         # NEW: Capacity Analysis
         st.header("Company Capacity Analysis")
