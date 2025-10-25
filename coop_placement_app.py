@@ -38,8 +38,7 @@ def generate_synthetic_data(n_students=15, n_companies=15):
     student_names = [f"Student_{i+1:02d}" for i in range(n_students)]
     students_df = pd.DataFrame({
         'student_id': range(1, n_students+1),
-        'student_name': student_names,
-        'gpa': np.random.uniform(3.0, 4.0, n_students).round(2)
+        'student_name': student_names
     })
     
     # Companies
@@ -96,7 +95,7 @@ def generate_synthetic_data(n_students=15, n_companies=15):
 
 def initialize_empty_data():
     """Initialize empty dataframes"""
-    students_df = pd.DataFrame(columns=['student_id', 'student_name', 'gpa'])
+    students_df = pd.DataFrame(columns=['student_id', 'student_name'])
     companies_df = pd.DataFrame(columns=['company_id', 'company_name', 'industry', 'it2_capacity', 'it3_capacity'])
     rankings_df = pd.DataFrame(columns=['student_id', 'company_id', 'ranking'])
     return students_df, companies_df, rankings_df
@@ -122,16 +121,14 @@ def create_excel_template(n_students=20, n_companies=20):
     ws_students.title = "Students"
     ws_students['A1'] = 'student_id'
     ws_students['B1'] = 'student_name'
-    ws_students['C1'] = 'gpa'
     
-    for cell in ['A1', 'B1', 'C1']:
+    for cell in ['A1', 'B1']:
         ws_students[cell].font = Font(bold=True, color='FFFFFF')
         ws_students[cell].fill = PatternFill(start_color='366092', fill_type='solid')
     
     for i in range(2, n_students + 2):
         ws_students[f'A{i}'] = i-1
         ws_students[f'B{i}'] = f'Student_{i-1:02d}'
-        ws_students[f'C{i}'] = 3.5
     
     # Companies sheet
     ws_companies = wb.create_sheet("Companies")
@@ -344,16 +341,14 @@ elif page == "Manual Data Editor":
         st.header("Students Management")
         
         if st.session_state.students_df is None or len(st.session_state.students_df) == 0:
-            st.session_state.students_df = pd.DataFrame(columns=['student_id', 'student_name', 'gpa'])
+            st.session_state.students_df = pd.DataFrame(columns=['student_id', 'student_name'])
         
         # Add new student
         st.subheader("➕ Add New Student")
-        col1, col2, col3 = st.columns([2, 2, 1])
+        col1, col2 = st.columns([3, 1])
         with col1:
             new_student_name = st.text_input("Student Name", key="new_student_name")
         with col2:
-            new_student_gpa = st.number_input("GPA", min_value=0.0, max_value=4.0, value=3.5, step=0.01, key="new_student_gpa")
-        with col3:
             st.write("")
             st.write("")
             if st.button("Add Student", type="primary"):
@@ -363,8 +358,7 @@ elif page == "Manual Data Editor":
                              else 1)
                     new_row = pd.DataFrame({
                         'student_id': [new_id],
-                        'student_name': [new_student_name],
-                        'gpa': [new_student_gpa]
+                        'student_name': [new_student_name]
                     })
                     st.session_state.students_df = pd.concat([st.session_state.students_df, new_row], ignore_index=True)
                     
@@ -398,8 +392,7 @@ elif page == "Manual Data Editor":
                 num_rows="dynamic",
                 column_config={
                     "student_id": st.column_config.NumberColumn("ID", disabled=True),
-                    "student_name": st.column_config.TextColumn("Name", required=True),
-                    "gpa": st.column_config.NumberColumn("GPA", min_value=0.0, max_value=4.0, step=0.01)
+                    "student_name": st.column_config.TextColumn("Name", required=True)
                 },
                 hide_index=True,
                 key="students_editor"
@@ -674,27 +667,96 @@ elif page == "Exploratory Analysis":
         with col4:
             st.metric("Total IT2 Capacity", companies_df['it2_capacity'].sum())
         
-        # NEW: GPA Distribution
-        st.header("Student GPA Analysis")
+        # NEW: Student Similarity Analysis
+        st.header("Student Preference Similarity Analysis")
+        st.write("Students with similar rankings have similar preferences for companies.")
+        
+        # Create pivot table of rankings
+        pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
+        
+        # Calculate correlation matrix (similarity between students)
+        student_similarity = pivot_rankings.T.corr()
+        
+        # Map student IDs to names for display
+        student_names_dict = students_df.set_index('student_id')['student_name'].to_dict()
+        student_similarity.index = student_similarity.index.map(student_names_dict)
+        student_similarity.columns = student_similarity.columns.map(student_names_dict)
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            # Top students by GPA
-            top_students = students_df.nlargest(min(10, len(students_df)), 'gpa')
-            fig = px.bar(top_students, x='student_name', y='gpa',
-                        title=f"Top {min(10, len(students_df))} Students by GPA",
-                        labels={'gpa': 'GPA', 'student_name': 'Student Name'},
-                        color='gpa',
-                        color_continuous_scale='Viridis')
-            fig.update_xaxes(tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
+            # Similarity Heatmap
+            if len(students_df) <= 30:
+                fig = px.imshow(student_similarity, 
+                               labels=dict(x="Student", y="Student", color="Similarity"),
+                               title="Student Preference Similarity Matrix",
+                               aspect="auto",
+                               color_continuous_scale='RdYlGn',
+                               zmin=-1, zmax=1)
+                fig.update_xaxes(tickangle=-45)
+                fig.update_yaxes(tickangle=0)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info(f"Similarity matrix hidden for large datasets ({len(students_df)} students)")
         
         with col2:
-            # GPA distribution histogram
-            fig = px.histogram(students_df, x='gpa', nbins=20,
-                              title="Distribution of Student GPAs",
-                              labels={'gpa': 'GPA', 'count': 'Number of Students'})
-            st.plotly_chart(fig, use_container_width=True)
+            # Top Similar Student Pairs
+            st.subheader("Most Similar Students")
+            
+            # Get upper triangle of correlation matrix (avoid duplicates)
+            similarity_pairs = []
+            for i in range(len(student_similarity)):
+                for j in range(i+1, len(student_similarity)):
+                    similarity_pairs.append({
+                        'Student 1': student_similarity.index[i],
+                        'Student 2': student_similarity.columns[j],
+                        'Similarity': student_similarity.iloc[i, j]
+                    })
+            
+            if similarity_pairs:
+                similarity_df = pd.DataFrame(similarity_pairs)
+                similarity_df = similarity_df.sort_values('Similarity', ascending=False).head(10)
+                similarity_df['Similarity'] = similarity_df['Similarity'].round(3)
+                
+                st.dataframe(similarity_df, hide_index=True, height=350)
+                st.caption("Similarity ranges from -1 (opposite preferences) to 1 (identical preferences)")
+        
+        # Similarity distribution
+        st.subheader("Preference Similarity Distribution")
+        
+        # Get all pairwise similarities (upper triangle only)
+        upper_triangle = []
+        for i in range(len(student_similarity)):
+            for j in range(i+1, len(student_similarity)):
+                upper_triangle.append(student_similarity.iloc[i, j])
+        
+        fig = px.histogram(x=upper_triangle, nbins=30,
+                          title="Distribution of Student Preference Similarities",
+                          labels={'x': 'Similarity Score', 'count': 'Number of Student Pairs'})
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Student groups by similarity
+        st.subheader("Student Preference Groups")
+        st.write("Students grouped by how similar their company preferences are:")
+        
+        # Simple grouping based on average similarity
+        avg_similarity = student_similarity.mean(axis=1).sort_values(ascending=False)
+        
+        group_data = []
+        for student_name in avg_similarity.index[:min(15, len(students_df))]:
+            # Find most similar students to this one
+            similar_students = student_similarity[student_name].sort_values(ascending=False)[1:4]  # Top 3 (excluding self)
+            similar_names = [f"{name} ({sim:.2f})" for name, sim in similar_students.items()]
+            
+            group_data.append({
+                'Student': student_name,
+                'Avg Similarity': f"{avg_similarity[student_name]:.3f}",
+                'Most Similar To': ", ".join(similar_names)
+            })
+        
+        group_df = pd.DataFrame(group_data)
+        st.dataframe(group_df, hide_index=True, use_container_width=True, height=400)
         
         # NEW: Capacity Analysis
         st.header("Company Capacity Analysis")
