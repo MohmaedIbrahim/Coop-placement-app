@@ -146,8 +146,8 @@ def create_excel_template(n_students=20, n_companies=20):
         ws_companies.cell(i, 1, i-1)
         ws_companies.cell(i, 2, f'Company_{i-1:02d}')
         ws_companies.cell(i, 3, industries[(i-2) % 4])
-        ws_companies.cell(i, 4, 1)
-        ws_companies.cell(i, 5, 1)
+        ws_companies.cell(i, 4, 1)  # Default IT2 capacity
+        ws_companies.cell(i, 5, 1)  # Default IT3 capacity
     
     # Rankings sheet
     ws_rankings = wb.create_sheet("Rankings")
@@ -163,10 +163,11 @@ def create_excel_template(n_students=20, n_companies=20):
     ws_rankings['E1'].font = Font(bold=True, size=12)
     ws_rankings['E2'] = '1. Fill in student information in Students sheet'
     ws_rankings['E3'] = '2. Fill in company information in Companies sheet'
-    ws_rankings['E4'] = '3. Enter rankings (1-10, higher is better) for EACH student-company pair'
-    ws_rankings['E5'] = '4. Rankings: Each row = one student ranking one company'
-    ws_rankings['E6'] = '5. Total rows needed = (# students) × (# companies)'
-    ws_rankings['E7'] = f'6. For this template: {n_students} students × {n_companies} companies = {n_students * n_companies} rankings'
+    ws_rankings['E4'] = '   Note: Capacities can be 0 (company not offering that iteration)'
+    ws_rankings['E5'] = '3. Enter rankings (1-10, higher is better) for EACH student-company pair'
+    ws_rankings['E6'] = '4. Rankings: Each row = one student ranking one company'
+    ws_rankings['E7'] = '5. Total rows needed = (# students) × (# companies)'
+    ws_rankings['E8'] = f'6. For this template: {n_students} students × {n_companies} companies = {n_students * n_companies} rankings'
     
     buffer = BytesIO()
     wb.save(buffer)
@@ -428,9 +429,9 @@ elif page == "Manual Data Editor":
                 key="new_company_industry"
             )
         with col3:
-            new_it2_cap = st.number_input("IT2 Cap", min_value=1, value=1, step=1, key="new_it2_cap")
+            new_it2_cap = st.number_input("IT2 Cap", min_value=0, value=1, step=1, key="new_it2_cap")
         with col4:
-            new_it3_cap = st.number_input("IT3 Cap", min_value=1, value=1, step=1, key="new_it3_cap")
+            new_it3_cap = st.number_input("IT3 Cap", min_value=0, value=1, step=1, key="new_it3_cap")
         
         if st.button("Add Company", type="primary", key="add_company_btn"):
             if new_company_name:
@@ -479,8 +480,8 @@ elif page == "Manual Data Editor":
                         options=["General Insurance", "Consultancy", "Life Insurance", "Care/Disability", "Other"],
                         required=True
                     ),
-                    "it2_capacity": st.column_config.NumberColumn("IT2 Capacity", min_value=1, step=1),
-                    "it3_capacity": st.column_config.NumberColumn("IT3 Capacity", min_value=1, step=1)
+                    "it2_capacity": st.column_config.NumberColumn("IT2 Capacity", min_value=0, step=1),
+                    "it3_capacity": st.column_config.NumberColumn("IT3 Capacity", min_value=0, step=1)
                 },
                 hide_index=True,
                 key="companies_editor"
