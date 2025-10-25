@@ -358,7 +358,9 @@ elif page == "Manual Data Editor":
             st.write("")
             if st.button("Add Student", type="primary"):
                 if new_student_name:
-                    new_id = st.session_state.students_df['student_id'].max() + 1 if len(st.session_state.students_df) > 0 else 1
+                    new_id = (st.session_state.students_df['student_id'].max() + 1 
+                             if st.session_state.students_df is not None and len(st.session_state.students_df) > 0 
+                             else 1)
                     new_row = pd.DataFrame({
                         'student_id': [new_id],
                         'student_name': [new_student_name],
@@ -389,7 +391,7 @@ elif page == "Manual Data Editor":
         
         # Display and edit existing students
         st.subheader("📋 Current Students")
-        if len(st.session_state.students_df) > 0:
+        if st.session_state.students_df is not None and len(st.session_state.students_df) > 0:
             edited_students = st.data_editor(
                 st.session_state.students_df,
                 use_container_width=True,
@@ -435,7 +437,9 @@ elif page == "Manual Data Editor":
         
         if st.button("Add Company", type="primary", key="add_company_btn"):
             if new_company_name:
-                new_id = st.session_state.companies_df['company_id'].max() + 1 if len(st.session_state.companies_df) > 0 else 1
+                new_id = (st.session_state.companies_df['company_id'].max() + 1 
+                         if st.session_state.companies_df is not None and len(st.session_state.companies_df) > 0 
+                         else 1)
                 new_row = pd.DataFrame({
                     'company_id': [new_id],
                     'company_name': [new_company_name],
@@ -467,7 +471,7 @@ elif page == "Manual Data Editor":
         
         # Display and edit existing companies
         st.subheader("📋 Current Companies")
-        if len(st.session_state.companies_df) > 0:
+        if st.session_state.companies_df is not None and len(st.session_state.companies_df) > 0:
             edited_companies = st.data_editor(
                 st.session_state.companies_df,
                 use_container_width=True,
@@ -577,23 +581,34 @@ elif page == "Manual Data Editor":
         st.header("📊 Data Summary")
         
         if st.session_state.data_loaded:
-            errors, warnings = validate_data(
-                st.session_state.students_df,
-                st.session_state.companies_df,
-                st.session_state.rankings_df
-            )
+            # Check if dataframes are not None before validation
+            if (st.session_state.students_df is not None and 
+                st.session_state.companies_df is not None and 
+                st.session_state.rankings_df is not None):
+                
+                errors, warnings = validate_data(
+                    st.session_state.students_df,
+                    st.session_state.companies_df,
+                    st.session_state.rankings_df
+                )
+            else:
+                errors = ["Data not properly initialized"]
+                warnings = []
             
             # Metrics
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Students", len(st.session_state.students_df))
+                st.metric("Students", len(st.session_state.students_df) if st.session_state.students_df is not None else 0)
             with col2:
-                st.metric("Companies", len(st.session_state.companies_df))
+                st.metric("Companies", len(st.session_state.companies_df) if st.session_state.companies_df is not None else 0)
             with col3:
-                st.metric("Rankings", len(st.session_state.rankings_df))
+                st.metric("Rankings", len(st.session_state.rankings_df) if st.session_state.rankings_df is not None else 0)
             with col4:
-                expected = len(st.session_state.students_df) * len(st.session_state.companies_df)
-                completion = (len(st.session_state.rankings_df) / expected * 100) if expected > 0 else 0
+                n_students = len(st.session_state.students_df) if st.session_state.students_df is not None else 0
+                n_companies = len(st.session_state.companies_df) if st.session_state.companies_df is not None else 0
+                n_rankings = len(st.session_state.rankings_df) if st.session_state.rankings_df is not None else 0
+                expected = n_students * n_companies
+                completion = (n_rankings / expected * 100) if expected > 0 else 0
                 st.metric("Completeness", f"{completion:.0f}%")
             
             # Validation
@@ -612,18 +627,18 @@ elif page == "Manual Data Editor":
             
             # Capacity analysis
             st.subheader("📊 Capacity Analysis")
-            if len(st.session_state.companies_df) > 0:
+            if st.session_state.companies_df is not None and len(st.session_state.companies_df) > 0:
                 col1, col2 = st.columns(2)
                 with col1:
                     total_it2 = st.session_state.companies_df['it2_capacity'].sum()
                     st.metric("Total IT2 Capacity", total_it2)
-                    if len(st.session_state.students_df) > 0:
+                    if st.session_state.students_df is not None and len(st.session_state.students_df) > 0:
                         buffer = total_it2 - len(st.session_state.students_df)
                         st.write(f"Buffer: {buffer} spots")
                 with col2:
                     total_it3 = st.session_state.companies_df['it3_capacity'].sum()
                     st.metric("Total IT3 Capacity", total_it3)
-                    if len(st.session_state.students_df) > 0:
+                    if st.session_state.students_df is not None and len(st.session_state.students_df) > 0:
                         buffer = total_it3 - len(st.session_state.students_df)
                         st.write(f"Buffer: {buffer} spots")
             
