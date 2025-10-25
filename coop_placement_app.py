@@ -635,7 +635,7 @@ elif page == "Manual Data Editor":
         else:
             st.info("No data loaded. Use the tabs above to add students, companies, and rankings.")
 
-# PAGE 3: EXPLORATORY ANALYSIS (Same as before, just renumbered)
+# PAGE 3: EXPLORATORY ANALYSIS - UPDATED VERSION
 elif page == "Exploratory Analysis":
     st.title("📈 Exploratory Data Analysis")
     
@@ -658,6 +658,73 @@ elif page == "Exploratory Analysis":
         with col4:
             st.metric("Total IT2 Capacity", companies_df['it2_capacity'].sum())
         
+        # NEW: GPA Distribution
+        st.header("Student GPA Analysis")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Top students by GPA
+            top_students = students_df.nlargest(min(10, len(students_df)), 'gpa')
+            fig = px.bar(top_students, x='student_name', y='gpa',
+                        title=f"Top {min(10, len(students_df))} Students by GPA",
+                        labels={'gpa': 'GPA', 'student_name': 'Student Name'},
+                        color='gpa',
+                        color_continuous_scale='Viridis')
+            fig.update_xaxes(tickangle=-45)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # GPA distribution histogram
+            fig = px.histogram(students_df, x='gpa', nbins=20,
+                              title="Distribution of Student GPAs",
+                              labels={'gpa': 'GPA', 'count': 'Number of Students'})
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # NEW: Capacity Analysis
+        st.header("Company Capacity Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # IT2 Capacity by company
+            top_it2 = companies_df.nlargest(min(15, len(companies_df)), 'it2_capacity')
+            fig = px.bar(top_it2, x='company_name', y='it2_capacity',
+                        title=f"Top {min(15, len(companies_df))} Companies by IT2 Capacity",
+                        labels={'it2_capacity': 'IT2 Capacity', 'company_name': 'Company'},
+                        color='industry',
+                        color_discrete_sequence=px.colors.qualitative.Set2)
+            fig.update_xaxes(tickangle=-45)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # IT3 Capacity by company
+            top_it3 = companies_df.nlargest(min(15, len(companies_df)), 'it3_capacity')
+            fig = px.bar(top_it3, x='company_name', y='it3_capacity',
+                        title=f"Top {min(15, len(companies_df))} Companies by IT3 Capacity",
+                        labels={'it3_capacity': 'IT3 Capacity', 'company_name': 'Company'},
+                        color='industry',
+                        color_discrete_sequence=px.colors.qualitative.Set3)
+            fig.update_xaxes(tickangle=-45)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Total capacity comparison
+        capacity_df = pd.DataFrame({
+            'Capacity Type': ['IT2', 'IT3'],
+            'Total Capacity': [companies_df['it2_capacity'].sum(), companies_df['it3_capacity'].sum()],
+            'Students': [len(students_df), len(students_df)]
+        })
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name='Total Capacity', x=capacity_df['Capacity Type'], 
+                             y=capacity_df['Total Capacity'], marker_color='lightblue'))
+        fig.add_trace(go.Bar(name='Number of Students', x=capacity_df['Capacity Type'], 
+                             y=capacity_df['Students'], marker_color='salmon'))
+        fig.update_layout(title='Capacity vs Students Comparison',
+                          xaxis_title='Iteration',
+                          yaxis_title='Count',
+                          barmode='group')
+        st.plotly_chart(fig, use_container_width=True)
+        
         # Industry distribution
         st.header("Industry Distribution")
         col1, col2 = st.columns(2)
@@ -672,20 +739,6 @@ elif page == "Exploratory Analysis":
             st.write("**Industry Breakdown:**")
             st.dataframe(industry_counts.to_frame('Count'), height=200)
         
-        # Ranking distribution
-        st.header("Ranking Distribution")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig = px.histogram(rankings_df, x='ranking', nbins=10,
-                              title="Distribution of Rankings",
-                              labels={'ranking': 'Ranking', 'count': 'Frequency'})
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            fig = px.box(rankings_df, y='ranking', title="Ranking Box Plot")
-            st.plotly_chart(fig, use_container_width=True)
-        
         # Average ranking by company
         st.header("Average Rankings by Company")
         avg_rankings = rankings_df.groupby('company_id')['ranking'].mean().reset_index()
@@ -698,21 +751,31 @@ elif page == "Exploratory Analysis":
         fig.update_xaxes(tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
         
-        # Heatmap
+        # Heatmap - UPDATED WITH NAMES INSTEAD OF IDs
         st.header("Student-Company Ranking Heatmap")
         if len(students_df) <= 30 and len(companies_df) <= 30:
+            # Create pivot with IDs first
             pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
             
+            # Map IDs to names
+            student_names = students_df.set_index('student_id')['student_name'].to_dict()
+            company_names = companies_df.set_index('company_id')['company_name'].to_dict()
+            
+            # Rename index and columns
+            pivot_rankings.index = pivot_rankings.index.map(student_names)
+            pivot_rankings.columns = pivot_rankings.columns.map(company_names)
+            
             fig = px.imshow(pivot_rankings, 
-                           labels=dict(x="Company ID", y="Student ID", color="Ranking"),
+                           labels=dict(x="Company Name", y="Student Name", color="Ranking"),
                            title="Student Preferences Heatmap",
                            aspect="auto",
                            color_continuous_scale='RdYlGn')
+            fig.update_xaxes(tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info(f"Heatmap hidden for large datasets ({len(students_df)} students × {len(companies_df)} companies).")
 
-# PAGE 4: CLUSTERING (Same as before, just renumbered)
+# PAGE 4: CLUSTERING - UPDATED WITH NAMES INSTEAD OF IDs
 elif page == "Clustering":
     st.title("🔗 Hierarchical Clustering")
     
@@ -738,10 +801,22 @@ elif page == "Clustering":
         Z = linkage(pivot_rankings, method=method)
         
         st.header("Dendrogram")
-        fig = go.Figure()
         
+        # Create mapping of student IDs to names
+        student_names_dict = students_df.set_index('student_id')['student_name'].to_dict()
+        
+        # Get the order of student IDs from dendrogram
         from scipy.cluster.hierarchy import dendrogram as scipy_dendrogram
-        dend = scipy_dendrogram(Z, no_plot=True)
+        
+        # First get the dendrogram with labels as student IDs
+        dend = scipy_dendrogram(Z, labels=pivot_rankings.index.tolist(), no_plot=True)
+        
+        # Map the labels to student names
+        student_id_labels = [int(x) for x in dend['ivl']]
+        name_labels = [student_names_dict[sid] for sid in student_id_labels]
+        
+        # Create the plotly figure
+        fig = go.Figure()
         
         icoord = np.array(dend['icoord'])
         dcoord = np.array(dend['dcoord'])
@@ -755,11 +830,21 @@ elif page == "Clustering":
                 showlegend=False
             ))
         
+        # Update x-axis to show student names
+        x_positions = dend['icoord']
+        unique_x = sorted(set([x for coord in x_positions for x in coord if x % 10 == 5]))
+        
         fig.update_layout(
             title=f"Hierarchical Clustering Dendrogram (Method: {method})",
-            xaxis_title="Student ID",
+            xaxis_title="Student Name",
             yaxis_title="Distance",
-            height=500
+            height=600,
+            xaxis=dict(
+                tickmode='array',
+                tickvals=unique_x,
+                ticktext=name_labels,
+                tickangle=-45
+            )
         )
         st.plotly_chart(fig, use_container_width=True)
         
