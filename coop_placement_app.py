@@ -323,9 +323,9 @@ if page == "Data Setup":
         
         col1, col2 = st.columns(2)
         with col1:
-            n_students = st.number_input("Number of Students", min_value=5, max_value=100, value=15, step=1)
+            n_students = st.number_input("Number of Students", min_value=1, max_value=100, value=15, step=1)
         with col2:
-            n_companies = st.number_input("Number of Companies", min_value=5, max_value=100, value=15, step=1)
+            n_companies = st.number_input("Number of Companies", min_value=1, max_value=100, value=15, step=1)
         
         if st.button("Generate Synthetic Data", type="primary"):
             students_df, companies_df, rankings_df = generate_synthetic_data(n_students, n_companies)
@@ -358,9 +358,9 @@ if page == "Data Setup":
         
         col1, col2 = st.columns(2)
         with col1:
-            template_students = st.number_input("Students in template", min_value=5, max_value=200, value=20, step=5)
+            template_students = st.number_input("Students in template", min_value=1, max_value=200, value=20, step=5)
         with col2:
-            template_companies = st.number_input("Companies in template", min_value=5, max_value=200, value=20, step=5)
+            template_companies = st.number_input("Companies in template", min_value=1, max_value=200, value=20, step=5)
         
         template_buffer = create_excel_template(template_students, template_companies)
         st.download_button(
