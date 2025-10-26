@@ -181,27 +181,42 @@ def load_excel_data(file):
         return None, None, None, str(e)
 
 def validate_data(students_df, companies_df, rankings_df):
-    """Validate uploaded data"""
+    """Validate uploaded data with comprehensive checks"""
     errors = []
     warnings = []
     
     n_students = len(students_df)
     n_companies = len(companies_df)
     
+    # Basic existence checks
     if n_students == 0:
         errors.append("No students found")
     if n_companies == 0:
         errors.append("No companies found")
     
+    # Check for missing or null industry assignments
+    if n_companies > 0:
+        if companies_df['industry'].isna().any():
+            null_companies = companies_df[companies_df['industry'].isna()]['company_name'].tolist()
+            errors.append(f"Some companies have no industry assigned: {', '.join(map(str, null_companies))}")
+        
+        # Check if companies have empty string industries
+        if (companies_df['industry'] == '').any():
+            empty_companies = companies_df[companies_df['industry'] == '']['company_name'].tolist()
+            errors.append(f"Some companies have empty industry: {', '.join(map(str, empty_companies))}")
+    
     if n_students > 0 and n_companies > 0:
+        # Rankings completeness check
         expected_rankings = n_students * n_companies
         if len(rankings_df) != expected_rankings:
             errors.append(f"Expected {expected_rankings} rankings ({n_students} students × {n_companies} companies), got {len(rankings_df)}")
         
+        # Rankings range check
         if len(rankings_df) > 0:
             if rankings_df['ranking'].min() < 1 or rankings_df['ranking'].max() > 10:
                 errors.append("Rankings must be between 1 and 10")
         
+        # Capacity checks
         total_it2_capacity = companies_df['it2_capacity'].sum()
         total_it3_capacity = companies_df['it3_capacity'].sum()
         
@@ -211,13 +226,89 @@ def validate_data(students_df, companies_df, rankings_df):
         if total_it3_capacity < n_students:
             errors.append(f"Total IT3 capacity ({total_it3_capacity}) is less than number of students ({n_students})")
         
+        # Capacity warnings for tight constraints
         if total_it2_capacity < n_students * 1.2:
-            warnings.append(f"IT2 capacity is tight. Consider increasing for better optimization.")
+            warnings.append(f"IT2 capacity is tight ({total_it2_capacity} for {n_students} students). Consider increasing for better optimization.")
         
         if total_it3_capacity < n_students * 1.2:
-            warnings.append(f"IT3 capacity is tight. Consider increasing for better optimization.")
+            warnings.append(f"IT3 capacity is tight ({total_it3_capacity} for {n_students} students). Consider increasing for better optimization.")
+        
+        # Industry diversity feasibility check
+        if n_companies > 0 and not companies_df['industry'].isna().all():
+            industry_capacities = companies_df.groupby('industry').agg({
+                'it2_capacity': 'sum',
+                'it3_capacity': 'sum'
+            })
+            
+            for industry, row in industry_capacities.iterrows():
+                total_industry_capacity = row['it2_capacity'] + row['it3_capacity']
+                if total_industry_capacity < n_students:
+                    warnings.append(
+                        f"Industry '{industry}' has limited capacity ({int(total_industry_capacity)} total slots). "
+                        f"If many students prefer this industry, diversity constraints may be tight."
+                    )
     
     return errors, warnings
+
+def check_optimization_feasibility(students_df, companies_df):
+    """
+    Perform detailed feasibility checks before optimization
+    Returns: (is_feasible, error_messages, warning_messages)
+    """
+    errors = []
+    warnings = []
+    
+    n_students = len(students_df)
+    total_it2_capacity = companies_df['it2_capacity'].sum()
+    total_it3_capacity = companies_df['it3_capacity'].sum()
+    
+    # Critical capacity check
+    if total_it2_capacity < n_students:
+        errors.append(f"❌ INFEASIBLE: IT2 capacity ({total_it2_capacity}) < students ({n_students})")
+    
+    if total_it3_capacity < n_students:
+        errors.append(f"❌ INFEASIBLE: IT3 capacity ({total_it3_capacity}) < students ({n_students})")
+    
+    # Industry diversity feasibility analysis
+    industry_capacities = companies_df.groupby('industry').agg({
+        'it2_capacity': 'sum',
+        'it3_capacity': 'sum',
+        'company_id': 'count'
+    }).rename(columns={'company_id': 'num_companies'})
+    
+    for industry, row in industry_capacities.iterrows():
+        total_capacity = row['it2_capacity'] + row['it3_capacity']
+        
+        # Each student can do at most 1 placement in each industry
+        # So we need: total_industry_capacity >= n_students for full flexibility
+        if total_capacity < n_students:
+            warnings.append(
+                f"⚠️ Industry '{industry}' has only {int(total_capacity)} total slots for {n_students} students. "
+                f"Diversity constraints may force suboptimal assignments."
+            )
+        
+        # Check if any industry dominates capacity
+        total_capacity_all = total_it2_capacity + total_it3_capacity
+        industry_percentage = (total_capacity / total_capacity_all) * 100
+        
+        if industry_percentage > 50:
+            warnings.append(
+                f"⚠️ Industry '{industry}' dominates capacity ({industry_percentage:.1f}% of total). "
+                f"This may limit placement diversity."
+            )
+    
+    # Check for industries with very low capacity
+    min_recommended_capacity = n_students * 0.15  # At least 15% of students should be placeable
+    for industry, row in industry_capacities.iterrows():
+        total_capacity = row['it2_capacity'] + row['it3_capacity']
+        if total_capacity < min_recommended_capacity:
+            warnings.append(
+                f"⚠️ Industry '{industry}' has very low capacity ({int(total_capacity)} slots). "
+                f"Consider adding more companies or increasing capacity."
+            )
+    
+    is_feasible = len(errors) == 0
+    return is_feasible, errors, warnings
 
 # PAGE 1: DATA SETUP (Quick Start)
 if page == "Data Setup":
@@ -316,7 +407,7 @@ if page == "Data Setup":
                     with col3:
                         st.metric("Rankings", len(rankings_df))
 
-# PAGE 2: MANUAL DATA EDITOR (NEW!)
+# PAGE 2: MANUAL DATA EDITOR
 elif page == "Manual Data Editor":
     st.title("✏️ Manual Data Editor")
     st.write("Create and edit your data manually - full control over students, companies, and rankings.")
@@ -342,153 +433,115 @@ elif page == "Manual Data Editor":
         if st.session_state.students_df is None or len(st.session_state.students_df) == 0:
             st.session_state.students_df = pd.DataFrame(columns=['student_id', 'student_name'])
         
-        # Add new student
-        st.subheader("➕ Add New Student")
+        st.subheader("Add New Student")
         col1, col2 = st.columns([3, 1])
         with col1:
             new_student_name = st.text_input("Student Name", key="new_student_name")
         with col2:
-            st.write("")
-            st.write("")
-            if st.button("Add Student", type="primary"):
+            if st.button("➕ Add Student"):
                 if new_student_name:
-                    new_id = (st.session_state.students_df['student_id'].max() + 1 
-                             if st.session_state.students_df is not None and len(st.session_state.students_df) > 0 
-                             else 1)
-                    new_row = pd.DataFrame({
-                        'student_id': [new_id],
-                        'student_name': [new_student_name]
-                    })
+                    new_id = 1 if len(st.session_state.students_df) == 0 else st.session_state.students_df['student_id'].max() + 1
+                    new_row = pd.DataFrame({'student_id': [new_id], 'student_name': [new_student_name]})
                     st.session_state.students_df = pd.concat([st.session_state.students_df, new_row], ignore_index=True)
-                    
-                    # Regenerate rankings if companies exist
-                    if st.session_state.companies_df is not None and len(st.session_state.companies_df) > 0:
-                        # Add rankings for this new student with all companies
-                        new_rankings = []
-                        for company_id in st.session_state.companies_df['company_id']:
-                            new_rankings.append({
-                                'student_id': new_id,
-                                'company_id': company_id,
-                                'ranking': 5
-                            })
-                        if st.session_state.rankings_df is None:
-                            st.session_state.rankings_df = pd.DataFrame(new_rankings)
-                        else:
-                            st.session_state.rankings_df = pd.concat([st.session_state.rankings_df, pd.DataFrame(new_rankings)], ignore_index=True)
-                    
-                    st.session_state.data_loaded = True
-                    st.success(f"✅ Added student: {new_student_name}")
+                    st.success(f"Added {new_student_name}")
                     st.rerun()
                 else:
-                    st.error("❌ Please enter a student name")
+                    st.warning("Please enter a student name")
         
-        # Display and edit existing students
-        st.subheader("📋 Current Students")
-        if st.session_state.students_df is not None and len(st.session_state.students_df) > 0:
+        st.subheader("Current Students")
+        if len(st.session_state.students_df) > 0:
             edited_students = st.data_editor(
                 st.session_state.students_df,
-                use_container_width=True,
                 num_rows="dynamic",
-                column_config={
-                    "student_id": st.column_config.NumberColumn("ID", disabled=True),
-                    "student_name": st.column_config.TextColumn("Name", required=True)
-                },
-                hide_index=True,
-                key="students_editor"
+                use_container_width=True,
+                key="students_editor",
+                hide_index=True
             )
             
-            if st.button("💾 Save Students Changes"):
+            if st.button("💾 Save Student Changes"):
                 st.session_state.students_df = edited_students
-                st.success("✅ Students updated!")
+                # Regenerate rankings if companies exist
+                if st.session_state.companies_df is not None and len(st.session_state.companies_df) > 0:
+                    st.session_state.rankings_df = regenerate_rankings(
+                        st.session_state.students_df,
+                        st.session_state.companies_df
+                    )
+                    st.info("Rankings regenerated for all student-company pairs")
+                st.session_state.data_loaded = True
+                st.success("Student data saved!")
                 st.rerun()
         else:
-            st.info("No students yet. Add your first student above!")
+            st.info("No students yet. Add students above.")
     
     # TAB 2: COMPANIES EDITOR
     with tab2:
         st.header("Companies Management")
         
         if st.session_state.companies_df is None or len(st.session_state.companies_df) == 0:
-            st.session_state.companies_df = pd.DataFrame(columns=['company_id', 'company_name', 'industry', 'it2_capacity', 'it3_capacity'])
+            st.session_state.companies_df = pd.DataFrame(
+                columns=['company_id', 'company_name', 'industry', 'it2_capacity', 'it3_capacity']
+            )
         
-        # Add new company
-        st.subheader("➕ Add New Company")
+        st.subheader("Add New Company")
         col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
         with col1:
             new_company_name = st.text_input("Company Name", key="new_company_name")
         with col2:
-            new_company_industry = st.selectbox(
-                "Industry",
-                ["General Insurance", "Consultancy", "Life Insurance", "Care/Disability", "Other"],
-                key="new_company_industry"
-            )
+            new_industry = st.selectbox("Industry", 
+                                       ["General Insurance", "Consultancy", "Life Insurance", "Care/Disability", "Other"],
+                                       key="new_industry")
         with col3:
-            new_it2_cap = st.number_input("IT2 Cap", min_value=0, value=1, step=1, key="new_it2_cap")
+            new_it2_cap = st.number_input("IT2 Cap", min_value=0, value=1, key="new_it2_cap")
         with col4:
-            new_it3_cap = st.number_input("IT3 Cap", min_value=0, value=1, step=1, key="new_it3_cap")
+            new_it3_cap = st.number_input("IT3 Cap", min_value=0, value=1, key="new_it3_cap")
         
-        if st.button("Add Company", type="primary", key="add_company_btn"):
+        if st.button("➕ Add Company"):
             if new_company_name:
-                new_id = (st.session_state.companies_df['company_id'].max() + 1 
-                         if st.session_state.companies_df is not None and len(st.session_state.companies_df) > 0 
-                         else 1)
+                new_id = 1 if len(st.session_state.companies_df) == 0 else st.session_state.companies_df['company_id'].max() + 1
                 new_row = pd.DataFrame({
                     'company_id': [new_id],
                     'company_name': [new_company_name],
-                    'industry': [new_company_industry],
+                    'industry': [new_industry],
                     'it2_capacity': [new_it2_cap],
                     'it3_capacity': [new_it3_cap]
                 })
                 st.session_state.companies_df = pd.concat([st.session_state.companies_df, new_row], ignore_index=True)
-                
-                # Add rankings for all students with this new company
-                if st.session_state.students_df is not None and len(st.session_state.students_df) > 0:
-                    new_rankings = []
-                    for student_id in st.session_state.students_df['student_id']:
-                        new_rankings.append({
-                            'student_id': student_id,
-                            'company_id': new_id,
-                            'ranking': 5
-                        })
-                    if st.session_state.rankings_df is None:
-                        st.session_state.rankings_df = pd.DataFrame(new_rankings)
-                    else:
-                        st.session_state.rankings_df = pd.concat([st.session_state.rankings_df, pd.DataFrame(new_rankings)], ignore_index=True)
-                
-                st.session_state.data_loaded = True
-                st.success(f"✅ Added company: {new_company_name}")
+                st.success(f"Added {new_company_name}")
                 st.rerun()
             else:
-                st.error("❌ Please enter a company name")
+                st.warning("Please enter a company name")
         
-        # Display and edit existing companies
-        st.subheader("📋 Current Companies")
-        if st.session_state.companies_df is not None and len(st.session_state.companies_df) > 0:
+        st.subheader("Current Companies")
+        if len(st.session_state.companies_df) > 0:
             edited_companies = st.data_editor(
                 st.session_state.companies_df,
-                use_container_width=True,
                 num_rows="dynamic",
+                use_container_width=True,
+                key="companies_editor",
+                hide_index=True,
                 column_config={
-                    "company_id": st.column_config.NumberColumn("ID", disabled=True),
-                    "company_name": st.column_config.TextColumn("Company Name", required=True),
                     "industry": st.column_config.SelectboxColumn(
                         "Industry",
                         options=["General Insurance", "Consultancy", "Life Insurance", "Care/Disability", "Other"],
                         required=True
-                    ),
-                    "it2_capacity": st.column_config.NumberColumn("IT2 Capacity", min_value=0, step=1),
-                    "it3_capacity": st.column_config.NumberColumn("IT3 Capacity", min_value=0, step=1)
-                },
-                hide_index=True,
-                key="companies_editor"
+                    )
+                }
             )
             
-            if st.button("💾 Save Companies Changes"):
+            if st.button("💾 Save Company Changes"):
                 st.session_state.companies_df = edited_companies
-                st.success("✅ Companies updated!")
+                # Regenerate rankings if students exist
+                if st.session_state.students_df is not None and len(st.session_state.students_df) > 0:
+                    st.session_state.rankings_df = regenerate_rankings(
+                        st.session_state.students_df,
+                        st.session_state.companies_df
+                    )
+                    st.info("Rankings regenerated for all student-company pairs")
+                st.session_state.data_loaded = True
+                st.success("Company data saved!")
                 st.rerun()
         else:
-            st.info("No companies yet. Add your first company above!")
+            st.info("No companies yet. Add companies above.")
     
     # TAB 3: RANKINGS EDITOR
     with tab3:
@@ -501,154 +554,123 @@ elif page == "Manual Data Editor":
         else:
             # Initialize rankings if needed
             if st.session_state.rankings_df is None or len(st.session_state.rankings_df) == 0:
-                st.session_state.rankings_df = regenerate_rankings(st.session_state.students_df, st.session_state.companies_df)
+                st.session_state.rankings_df = regenerate_rankings(
+                    st.session_state.students_df,
+                    st.session_state.companies_df
+                )
             
-            # Quick edit interface with auto-save dropdowns
-            st.subheader("✏️ Edit Rankings - Auto-Save")
+            st.write("**Edit Rankings (1-10, where 10 is highest preference)**")
+            st.info(f"Total rankings to edit: {len(st.session_state.students_df)} students × {len(st.session_state.companies_df)} companies = {len(st.session_state.rankings_df)} rankings")
             
-            # Select student
-            student_names = st.session_state.students_df.set_index('student_id')['student_name'].to_dict()
-            company_names = st.session_state.companies_df.set_index('company_id')['company_name'].to_dict()
-            
-            selected_student_id = st.selectbox(
-                "Select Student",
-                st.session_state.students_df['student_id'].tolist(),
-                format_func=lambda x: f"{x} - {student_names[x]}"
+            # Create a pivot table for easier editing
+            rankings_pivot = st.session_state.rankings_df.pivot(
+                index='student_id',
+                columns='company_id',
+                values='ranking'
             )
             
-            st.write("**Rank all companies for this student (changes save automatically):**")
+            # Add student names as index
+            student_names = st.session_state.students_df.set_index('student_id')['student_name']
+            rankings_pivot.index = rankings_pivot.index.map(student_names)
             
-            # Get current rankings for selected student
-            student_rankings = st.session_state.rankings_df[
-                st.session_state.rankings_df['student_id'] == selected_student_id
-            ].copy()
+            # Add company names as columns
+            company_names = st.session_state.companies_df.set_index('company_id')['company_name']
+            rankings_pivot.columns = rankings_pivot.columns.map(company_names)
             
-            # Create dropdown for each company
-            ranking_options = list(range(1, 11))  # 1-10
-            
-            # Display in a nice grid format
-            st.write("")  # spacing
-            
-            for idx, row in student_rankings.iterrows():
-                company_id = row['company_id']
-                company_name = company_names[company_id]
-                current_ranking = int(row['ranking'])
-                
-                # Create columns for layout
-                col1, col2 = st.columns([3, 1])
-                
-                with col1:
-                    st.write(f"**{company_name}**")
-                
-                with col2:
-                    # Dropdown with auto-save
-                    new_ranking = st.selectbox(
-                        "Rank",
-                        options=ranking_options,
-                        index=ranking_options.index(current_ranking),
-                        key=f"rank_{selected_student_id}_{company_id}",
-                        label_visibility="collapsed"
-                    )
-                    
-                    # Auto-save if changed
-                    if new_ranking != current_ranking:
-                        mask = (st.session_state.rankings_df['student_id'] == selected_student_id) & \
-                               (st.session_state.rankings_df['company_id'] == company_id)
-                        st.session_state.rankings_df.loc[mask, 'ranking'] = new_ranking
-                        st.rerun()
-            
-            # Show all rankings table
-            st.subheader("📊 All Rankings (View)")
-            rankings_display = st.session_state.rankings_df.copy()
-            rankings_display['student_name'] = rankings_display['student_id'].map(student_names)
-            rankings_display['company_name'] = rankings_display['company_id'].map(company_names)
-            rankings_display = rankings_display[['student_name', 'company_name', 'ranking']]
-            
-            st.dataframe(
-                rankings_display,
+            # Allow editing
+            edited_rankings = st.data_editor(
+                rankings_pivot,
                 use_container_width=True,
-                height=400,
-                hide_index=True
+                key="rankings_editor"
             )
+            
+            if st.button("💾 Save Rankings"):
+                # Convert back to long format
+                rankings_long = edited_rankings.reset_index().melt(
+                    id_vars='index',
+                    var_name='company_name',
+                    value_name='ranking'
+                )
+                rankings_long.columns = ['student_name', 'company_name', 'ranking']
+                
+                # Map back to IDs
+                student_id_map = st.session_state.students_df.set_index('student_name')['student_id']
+                company_id_map = st.session_state.companies_df.set_index('company_name')['company_id']
+                
+                rankings_long['student_id'] = rankings_long['student_name'].map(student_id_map)
+                rankings_long['company_id'] = rankings_long['company_name'].map(company_id_map)
+                
+                st.session_state.rankings_df = rankings_long[['student_id', 'company_id', 'ranking']]
+                st.session_state.data_loaded = True
+                st.success("Rankings saved!")
+                st.rerun()
+            
+            # Bulk operations
+            st.subheader("Bulk Operations")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Reset All Rankings to 5"):
+                    st.session_state.rankings_df['ranking'] = 5
+                    st.success("All rankings reset to 5")
+                    st.rerun()
+            with col2:
+                if st.button("🎲 Randomize Rankings"):
+                    st.session_state.rankings_df['ranking'] = np.random.randint(1, 11, len(st.session_state.rankings_df))
+                    st.success("Rankings randomized")
+                    st.rerun()
     
     # TAB 4: SUMMARY
     with tab4:
-        st.header("📊 Data Summary")
+        st.header("Data Summary")
         
-        if st.session_state.data_loaded:
-            # Check if dataframes are not None before validation
-            if (st.session_state.students_df is not None and 
-                st.session_state.companies_df is not None and 
-                st.session_state.rankings_df is not None):
-                
-                errors, warnings = validate_data(
-                    st.session_state.students_df,
-                    st.session_state.companies_df,
-                    st.session_state.rankings_df
-                )
-            else:
-                errors = ["Data not properly initialized"]
-                warnings = []
-            
-            # Metrics
-            col1, col2, col3, col4 = st.columns(4)
+        if not st.session_state.data_loaded:
+            st.warning("⚠️ No data loaded yet")
+        else:
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Students", len(st.session_state.students_df) if st.session_state.students_df is not None else 0)
+                st.metric("Students", len(st.session_state.students_df))
             with col2:
-                st.metric("Companies", len(st.session_state.companies_df) if st.session_state.companies_df is not None else 0)
+                st.metric("Companies", len(st.session_state.companies_df))
             with col3:
-                st.metric("Rankings", len(st.session_state.rankings_df) if st.session_state.rankings_df is not None else 0)
-            with col4:
-                n_students = len(st.session_state.students_df) if st.session_state.students_df is not None else 0
-                n_companies = len(st.session_state.companies_df) if st.session_state.companies_df is not None else 0
-                n_rankings = len(st.session_state.rankings_df) if st.session_state.rankings_df is not None else 0
-                expected = n_students * n_companies
-                completion = (n_rankings / expected * 100) if expected > 0 else 0
-                st.metric("Completeness", f"{completion:.0f}%")
+                st.metric("Rankings", len(st.session_state.rankings_df))
             
-            # Validation
-            st.subheader("✅ Validation")
+            st.subheader("Data Validation")
+            errors, warnings = validate_data(
+                st.session_state.students_df,
+                st.session_state.companies_df,
+                st.session_state.rankings_df
+            )
+            
             if errors:
-                st.error("❌ Errors Found:")
+                st.error("❌ Data Issues Found:")
                 for err in errors:
                     st.write(f"- {err}")
             else:
-                st.success("✅ All validation checks passed!")
+                st.success("✅ Data validation passed!")
             
             if warnings:
                 st.warning("⚠️ Warnings:")
                 for warn in warnings:
                     st.write(f"- {warn}")
             
-            # Capacity analysis
-            st.subheader("📊 Capacity Analysis")
-            if st.session_state.companies_df is not None and len(st.session_state.companies_df) > 0:
-                col1, col2 = st.columns(2)
-                with col1:
-                    total_it2 = st.session_state.companies_df['it2_capacity'].sum()
-                    st.metric("Total IT2 Capacity", total_it2)
-                    if st.session_state.students_df is not None and len(st.session_state.students_df) > 0:
-                        buffer = total_it2 - len(st.session_state.students_df)
-                        st.write(f"Buffer: {buffer} spots")
-                with col2:
-                    total_it3 = st.session_state.companies_df['it3_capacity'].sum()
-                    st.metric("Total IT3 Capacity", total_it3)
-                    if st.session_state.students_df is not None and len(st.session_state.students_df) > 0:
-                        buffer = total_it3 - len(st.session_state.students_df)
-                        st.write(f"Buffer: {buffer} spots")
+            # Export functionality
+            st.subheader("Export Data")
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                st.session_state.students_df.to_excel(writer, sheet_name='Students', index=False)
+                st.session_state.companies_df.to_excel(writer, sheet_name='Companies', index=False)
+                st.session_state.rankings_df.to_excel(writer, sheet_name='Rankings', index=False)
             
-            # Ready to optimize?
-            st.subheader("🚀 Ready to Optimize?")
-            if not errors:
-                st.success("✅ Your data is ready! Go to the 'Optimization' page to solve.")
-            else:
-                st.error("❌ Fix the errors above before optimizing")
-        else:
-            st.info("No data loaded. Use the tabs above to add students, companies, and rankings.")
+            st.download_button(
+                label="📥 Download Data (Excel)",
+                data=output.getvalue(),
+                file_name="coop_placement_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-# PAGE 3: EXPLORATORY ANALYSIS - UPDATED VERSION
+# PAGE 3: EXPLORATORY ANALYSIS
 elif page == "Exploratory Analysis":
-    st.title("📈 Exploratory Data Analysis")
+    st.title("📊 Exploratory Data Analysis")
     
     if not st.session_state.data_loaded:
         st.warning("⚠️ Please load data first in the Data Setup page.")
@@ -657,115 +679,42 @@ elif page == "Exploratory Analysis":
         companies_df = st.session_state.companies_df
         rankings_df = st.session_state.rankings_df
         
-        # Summary statistics
-        st.header("Summary Statistics")
+        # Overview metrics
+        st.header("Dataset Overview")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Students", len(students_df))
+            st.metric("Students", len(students_df))
         with col2:
-            st.metric("Total Companies", len(companies_df))
+            st.metric("Companies", len(companies_df))
         with col3:
-            st.metric("Average Ranking", f"{rankings_df['ranking'].mean():.2f}")
+            st.metric("Industries", companies_df['industry'].nunique())
         with col4:
-            st.metric("Total IT2 Capacity", companies_df['it2_capacity'].sum())
+            st.metric("Avg Ranking", f"{rankings_df['ranking'].mean():.2f}")
         
-        # Student Ranking Matches - Simple View
-        st.header("Students with Matching Rankings")
-        st.write("See which students gave the same rankings to the same companies.")
+        # Ranking distribution
+        st.header("Ranking Distribution")
+        fig = px.histogram(rankings_df, x='ranking', nbins=10,
+                          title="Distribution of All Rankings",
+                          labels={'ranking': 'Ranking Score', 'count': 'Frequency'})
+        st.plotly_chart(fig, use_container_width=True)
         
-        # For each company, show which students gave it the same rank
-        st.subheader("Students Who Ranked Companies Identically")
-        
-        # Group by company and ranking to find matches
-        company_names_dict = companies_df.set_index('company_id')['company_name'].to_dict()
-        student_names_dict = students_df.set_index('student_id')['student_name'].to_dict()
-        
-        # Add names to rankings
-        rankings_with_names = rankings_df.copy()
-        rankings_with_names['company_name'] = rankings_with_names['company_id'].map(company_names_dict)
-        rankings_with_names['student_name'] = rankings_with_names['student_id'].map(student_names_dict)
-        
-        # Find matches: students who gave the same rank to the same company
-        matching_groups = []
-        for company_id in companies_df['company_id']:
-            company_name = company_names_dict[company_id]
-            company_rankings = rankings_with_names[rankings_with_names['company_id'] == company_id]
-            
-            # Group by ranking value
-            for rank_value in sorted(company_rankings['ranking'].unique()):
-                students_with_rank = company_rankings[company_rankings['ranking'] == rank_value]['student_name'].tolist()
-                if len(students_with_rank) > 1:  # Only show if 2+ students match
-                    matching_groups.append({
-                        'Company': company_name,
-                        'Ranking': rank_value,
-                        'Number of Students': len(students_with_rank),
-                        'Students': ', '.join(students_with_rank)
-                    })
-        
-        if matching_groups:
-            matches_df = pd.DataFrame(matching_groups)
-            matches_df = matches_df.sort_values(['Company', 'Ranking'])
-            
-            # Show table
-            st.dataframe(matches_df, hide_index=True, use_container_width=True, height=400)
-            
-            # Summary metrics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Matching Groups", len(matches_df))
-            with col2:
-                avg_group_size = matches_df['Number of Students'].mean()
-                st.metric("Avg Group Size", f"{avg_group_size:.1f}")
-            with col3:
-                max_group = matches_df['Number of Students'].max()
-                st.metric("Largest Agreement", f"{max_group} students")
-        else:
-            st.info("No students gave the same ranking to the same company.")
-        
-        # Heatmap - Add directly after matching table
-        st.subheader("Student-Company Ranking Heatmap")
-        if len(students_df) <= 30 and len(companies_df) <= 30:
-            # Create pivot with IDs first
-            pivot_rankings = rankings_df.pivot(index='student_id', columns='company_id', values='ranking')
-            
-            # Map IDs to names
-            student_names_map = students_df.set_index('student_id')['student_name'].to_dict()
-            company_names_map = companies_df.set_index('company_id')['company_name'].to_dict()
-            
-            # Rename index and columns
-            pivot_rankings.index = pivot_rankings.index.map(student_names_map)
-            pivot_rankings.columns = pivot_rankings.columns.map(company_names_map)
-            
-            fig = px.imshow(pivot_rankings, 
-                           labels=dict(x="Company Name", y="Student Name", color="Ranking"),
-                           title="Student Preferences Heatmap",
-                           aspect="auto",
-                           color_continuous_scale='RdYlGn')
-            fig.update_xaxes(tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info(f"Heatmap hidden for large datasets ({len(students_df)} students × {len(companies_df)} companies).")
-        
-        # NEW: Capacity Analysis
-        st.header("Company Capacity Analysis")
-        
+        # Company analysis
+        st.header("Company Analysis")
         col1, col2 = st.columns(2)
         
         with col1:
-            # IT2 Capacity by company
-            top_it2 = companies_df.nlargest(min(15, len(companies_df)), 'it2_capacity')
-            fig = px.bar(top_it2, x='company_name', y='it2_capacity',
+            top_companies = companies_df.nlargest(min(15, len(companies_df)), 'it2_capacity')
+            fig = px.bar(top_companies, x='company_name', y='it2_capacity',
                         title=f"Top {min(15, len(companies_df))} Companies by IT2 Capacity",
                         labels={'it2_capacity': 'IT2 Capacity', 'company_name': 'Company'},
                         color='industry',
-                        color_discrete_sequence=px.colors.qualitative.Set2)
+                        color_discrete_sequence=px.colors.qualitative.Set3)
             fig.update_xaxes(tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            # IT3 Capacity by company
-            top_it3 = companies_df.nlargest(min(15, len(companies_df)), 'it3_capacity')
-            fig = px.bar(top_it3, x='company_name', y='it3_capacity',
+            top_companies = companies_df.nlargest(min(15, len(companies_df)), 'it3_capacity')
+            fig = px.bar(top_companies, x='company_name', y='it3_capacity',
                         title=f"Top {min(15, len(companies_df))} Companies by IT3 Capacity",
                         labels={'it3_capacity': 'IT3 Capacity', 'company_name': 'Company'},
                         color='industry',
@@ -817,7 +766,7 @@ elif page == "Exploratory Analysis":
         fig.update_xaxes(tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
 
-# PAGE 4: CLUSTERING - UPDATED WITH NAMES INSTEAD OF IDs
+# PAGE 4: CLUSTERING
 elif page == "Clustering":
     st.title("🔗 Hierarchical Clustering")
     
@@ -927,7 +876,7 @@ elif page == "Clustering":
                 st.write("**Top 5 Preferred Companies (average):**")
                 st.dataframe(avg_pref[['company_name', 'ranking']], hide_index=True)
 
-# PAGE 5: OPTIMIZATION (Same as before, just renumbered)
+# PAGE 5: OPTIMIZATION - UPDATED WITH ALL IMPROVEMENTS
 elif page == "Optimization":
     st.title("⚡ Placement Optimization")
     
@@ -952,61 +901,126 @@ elif page == "Optimization":
         if n_variables > 10000:
             st.warning("⚠️ Large problem size. Optimization may take several minutes.")
         
+        # PRE-OPTIMIZATION VALIDATION
+        st.header("Pre-Optimization Checks")
+        
+        # Run feasibility checks
+        is_feasible, feasibility_errors, feasibility_warnings = check_optimization_feasibility(students_df, companies_df)
+        
+        # Display validation results
+        if feasibility_errors:
+            st.error("🚫 **Critical Issues Detected:**")
+            for err in feasibility_errors:
+                st.write(err)
+            st.error("**Cannot proceed with optimization. Please fix the issues above.**")
+            st.stop()
+        else:
+            st.success("✅ Basic feasibility checks passed!")
+        
+        if feasibility_warnings:
+            with st.expander("⚠️ View Warnings (Click to expand)", expanded=False):
+                for warn in feasibility_warnings:
+                    st.write(warn)
+                st.info("💡 These warnings won't prevent optimization but may affect solution quality.")
+        
+        # Display industry capacity analysis
+        st.subheader("Industry Capacity Analysis")
+        industry_summary = companies_df.groupby('industry').agg({
+            'it2_capacity': 'sum',
+            'it3_capacity': 'sum',
+            'company_id': 'count'
+        }).rename(columns={'company_id': 'num_companies'})
+        industry_summary['total_capacity'] = industry_summary['it2_capacity'] + industry_summary['it3_capacity']
+        industry_summary = industry_summary.sort_values('total_capacity', ascending=False)
+        
+        st.dataframe(industry_summary, use_container_width=True)
+        
         if st.button("🚀 Solve Optimization Problem", type="primary"):
             with st.spinner("Solving optimization problem..."):
+                # Create the optimization problem
                 prob = pulp.LpProblem("CoopPlacement", pulp.LpMaximize)
                 
                 students = students_df['student_id'].tolist()
                 companies = companies_df['company_id'].tolist()
                 
-                x = {}
-                y = {}
+                # Decision variables
+                x = {}  # IT2 assignments
+                y = {}  # IT3 assignments
                 
                 for i in students:
                     for j in companies:
                         x[i, j] = pulp.LpVariable(f"x_{i}_{j}", cat='Binary')
                         y[i, j] = pulp.LpVariable(f"y_{i}_{j}", cat='Binary')
                 
+                # IMPROVED: Handle missing rankings by setting them to 0
                 rankings_dict = rankings_df.set_index(['student_id', 'company_id'])['ranking'].to_dict()
-                prob += pulp.lpSum([rankings_dict[i, j] * (x[i, j] + y[i, j]) 
-                                   for i in students for j in companies])
                 
-                for i in students:
-                    prob += pulp.lpSum([x[i, j] for j in companies]) == 1
-                
-                for i in students:
-                    prob += pulp.lpSum([y[i, j] for j in companies]) == 1
-                
-                for j in companies:
-                    capacity = companies_df[companies_df['company_id'] == j]['it2_capacity'].values[0]
-                    prob += pulp.lpSum([x[i, j] for i in students]) <= capacity
-                
-                for j in companies:
-                    capacity = companies_df[companies_df['company_id'] == j]['it3_capacity'].values[0]
-                    prob += pulp.lpSum([y[i, j] for i in students]) <= capacity
-                
+                # Ensure all student-company pairs have a ranking (default to 0 if missing)
+                complete_rankings_dict = {}
                 for i in students:
                     for j in companies:
-                        prob += x[i, j] + y[i, j] <= 1
+                        complete_rankings_dict[i, j] = rankings_dict.get((i, j), 0)
                 
+                # Objective function: Maximize total ranking
+                prob += pulp.lpSum([complete_rankings_dict[i, j] * (x[i, j] + y[i, j]) 
+                                   for i in students for j in companies])
+                
+                # Constraint 1: Every student does exactly one IT2 placement
+                for i in students:
+                    prob += pulp.lpSum([x[i, j] for j in companies]) == 1, f"IT2_assignment_student_{i}"
+                
+                # Constraint 2: Every student does exactly one IT3 placement
+                for i in students:
+                    prob += pulp.lpSum([y[i, j] for j in companies]) == 1, f"IT3_assignment_student_{i}"
+                
+                # Constraint 3: IT2 capacity constraints
+                for j in companies:
+                    capacity = companies_df[companies_df['company_id'] == j]['it2_capacity'].values[0]
+                    prob += pulp.lpSum([x[i, j] for i in students]) <= capacity, f"IT2_capacity_company_{j}"
+                
+                # Constraint 4: IT3 capacity constraints
+                for j in companies:
+                    capacity = companies_df[companies_df['company_id'] == j]['it3_capacity'].values[0]
+                    prob += pulp.lpSum([y[i, j] for i in students]) <= capacity, f"IT3_capacity_company_{j}"
+                
+                # Constraint 5: Students get different companies for IT2 and IT3
+                for i in students:
+                    for j in companies:
+                        prob += x[i, j] + y[i, j] <= 1, f"Different_companies_student_{i}_company_{j}"
+                
+                # Constraint 6: Industry diversity - at most one placement per industry per student
                 industry_companies = companies_df.groupby('industry')['company_id'].apply(list).to_dict()
                 
                 for i in students:
                     for industry, company_list in industry_companies.items():
-                        prob += pulp.lpSum([x[i, j] + y[i, j] for j in company_list]) <= 1
+                        prob += pulp.lpSum([x[i, j] + y[i, j] for j in company_list]) <= 1, \
+                                f"Industry_diversity_student_{i}_industry_{industry}"
                 
+                # Solve the problem
                 solver = pulp.PULP_CBC_CMD(msg=0)
                 prob.solve(solver)
                 
-                st.success(f"✅ Optimization Status: {pulp.LpStatus[prob.status]}")
+                # Display results
+                status_text = pulp.LpStatus[prob.status]
                 
-                col1, col2 = st.columns(2)
+                if prob.status == 1:  # Optimal solution found
+                    st.success(f"✅ Optimization Status: {status_text}")
+                else:
+                    st.error(f"❌ Optimization Status: {status_text}")
+                
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric("Objective Value", f"{pulp.value(prob.objective):.2f}")
                 with col2:
-                    st.metric("Max Possible", f"{rankings_df['ranking'].max() * 2 * len(students)}")
+                    max_possible = rankings_df['ranking'].max() * 2 * len(students)
+                    st.metric("Max Possible", f"{max_possible}")
+                with col3:
+                    if pulp.value(prob.objective) and max_possible > 0:
+                        efficiency = (pulp.value(prob.objective) / max_possible) * 100
+                        st.metric("Efficiency", f"{efficiency:.1f}%")
                 
                 if prob.status == 1:
+                    # Extract assignments
                     it2_assignments = []
                     it3_assignments = []
                     
@@ -1016,7 +1030,7 @@ elif page == "Optimization":
                                 student_name = students_df[students_df['student_id'] == i]['student_name'].values[0]
                                 company_name = companies_df[companies_df['company_id'] == j]['company_name'].values[0]
                                 industry = companies_df[companies_df['company_id'] == j]['industry'].values[0]
-                                ranking = rankings_dict[i, j]
+                                ranking = complete_rankings_dict[i, j]
                                 it2_assignments.append({
                                     'Student': student_name,
                                     'Company': company_name,
@@ -1028,7 +1042,7 @@ elif page == "Optimization":
                                 student_name = students_df[students_df['student_id'] == i]['student_name'].values[0]
                                 company_name = companies_df[companies_df['company_id'] == j]['company_name'].values[0]
                                 industry = companies_df[companies_df['company_id'] == j]['industry'].values[0]
-                                ranking = rankings_dict[i, j]
+                                ranking = complete_rankings_dict[i, j]
                                 it3_assignments.append({
                                     'Student': student_name,
                                     'Company': company_name,
@@ -1046,16 +1060,49 @@ elif page == "Optimization":
                     with tab1:
                         st.subheader("IT2 Placements")
                         st.dataframe(it2_df.sort_values('Student'), hide_index=True, height=500)
-                        st.metric("Average IT2 Ranking", f"{it2_df['Ranking'].mean():.2f}")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Average IT2 Ranking", f"{it2_df['Ranking'].mean():.2f}")
+                        with col2:
+                            st.metric("Min IT2 Ranking", f"{it2_df['Ranking'].min():.0f}")
+                        with col3:
+                            st.metric("Max IT2 Ranking", f"{it2_df['Ranking'].max():.0f}")
                     
                     with tab2:
                         st.subheader("IT3 Placements")
                         st.dataframe(it3_df.sort_values('Student'), hide_index=True, height=500)
-                        st.metric("Average IT3 Ranking", f"{it3_df['Ranking'].mean():.2f}")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Average IT3 Ranking", f"{it3_df['Ranking'].mean():.2f}")
+                        with col2:
+                            st.metric("Min IT3 Ranking", f"{it3_df['Ranking'].min():.0f}")
+                        with col3:
+                            st.metric("Max IT3 Ranking", f"{it3_df['Ranking'].max():.0f}")
                     
                     with tab3:
                         combined = it2_df.merge(it3_df, on='Student', suffixes=('_IT2', '_IT3'))
                         st.dataframe(combined, hide_index=True, height=500)
+                        
+                        # Check diversity constraint satisfaction
+                        st.subheader("Diversity Verification")
+                        diversity_check = []
+                        for _, row in combined.iterrows():
+                            same_industry = row['Industry_IT2'] == row['Industry_IT3']
+                            diversity_check.append({
+                                'Student': row['Student'],
+                                'IT2_Industry': row['Industry_IT2'],
+                                'IT3_Industry': row['Industry_IT3'],
+                                'Diverse': '✅' if not same_industry else '❌'
+                            })
+                        
+                        diversity_df = pd.DataFrame(diversity_check)
+                        all_diverse = all(row['Diverse'] == '✅' for row in diversity_check)
+                        
+                        if all_diverse:
+                            st.success("✅ All students have diverse industry placements!")
+                        else:
+                            st.warning("⚠️ Some students have placements in the same industry")
+                            st.dataframe(diversity_df[diversity_df['Diverse'] == '❌'])
                     
                     st.header("Placement Analysis")
                     
@@ -1077,6 +1124,19 @@ elif page == "Optimization":
                                    title="Placements by Industry")
                         st.plotly_chart(fig, use_container_width=True)
                     
+                    # Additional analytics
+                    st.subheader("Student Satisfaction Analysis")
+                    combined['Total_Ranking'] = combined['Ranking_IT2'] + combined['Ranking_IT3']
+                    combined['Avg_Ranking'] = combined['Total_Ranking'] / 2
+                    
+                    fig = px.bar(combined.sort_values('Total_Ranking', ascending=False).head(20),
+                               x='Student', y='Total_Ranking',
+                               title="Top 20 Students by Total Ranking",
+                               color='Avg_Ranking',
+                               color_continuous_scale='RdYlGn')
+                    fig.update_xaxes(tickangle=-45)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
                     st.header("Export Results")
                     
                     output = BytesIO()
@@ -1084,6 +1144,32 @@ elif page == "Optimization":
                         it2_df.to_excel(writer, sheet_name='IT2_Placements', index=False)
                         it3_df.to_excel(writer, sheet_name='IT3_Placements', index=False)
                         combined.to_excel(writer, sheet_name='Combined', index=False)
+                        
+                        # Add summary sheet
+                        summary_data = {
+                            'Metric': [
+                                'Total Students',
+                                'Total Companies',
+                                'Objective Value',
+                                'Max Possible',
+                                'Efficiency (%)',
+                                'Avg IT2 Ranking',
+                                'Avg IT3 Ranking',
+                                'Overall Avg Ranking'
+                            ],
+                            'Value': [
+                                len(students),
+                                len(companies),
+                                f"{pulp.value(prob.objective):.2f}",
+                                max_possible,
+                                f"{efficiency:.1f}" if 'efficiency' in locals() else 'N/A',
+                                f"{it2_df['Ranking'].mean():.2f}",
+                                f"{it3_df['Ranking'].mean():.2f}",
+                                f"{pd.concat([it2_df['Ranking'], it3_df['Ranking']]).mean():.2f}"
+                            ]
+                        }
+                        summary_df = pd.DataFrame(summary_data)
+                        summary_df.to_excel(writer, sheet_name='Summary', index=False)
                     
                     st.download_button(
                         label="📥 Download Results (Excel)",
@@ -1092,20 +1178,48 @@ elif page == "Optimization":
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
                 else:
-                    st.error("❌ Optimization failed to find a solution. Check constraints.")
-                    st.write("**Possible issues:**")
-                    st.write("- Total company capacity < Number of students")
-                    st.write("- Infeasible industry diversity constraints")
-                    st.write("- Check your data for inconsistencies")
+                    st.error("❌ Optimization failed to find a solution.")
+                    
+                    st.subheader("Possible Reasons:")
+                    reasons = []
+                    
+                    # Check capacity issues
+                    if companies_df['it2_capacity'].sum() < n_students:
+                        reasons.append("• Total IT2 capacity is less than number of students")
+                    if companies_df['it3_capacity'].sum() < n_students:
+                        reasons.append("• Total IT3 capacity is less than number of students")
+                    
+                    # Check industry diversity feasibility
+                    industry_capacities = companies_df.groupby('industry')[['it2_capacity', 'it3_capacity']].sum()
+                    for industry, row in industry_capacities.iterrows():
+                        total_cap = row['it2_capacity'] + row['it3_capacity']
+                        if total_cap < n_students:
+                            reasons.append(f"• Industry '{industry}' has insufficient total capacity ({int(total_cap)} < {n_students})")
+                    
+                    if not reasons:
+                        reasons.append("• Unknown issue - please check your data")
+                    
+                    for reason in reasons:
+                        st.write(reason)
+                    
+                    st.info("💡 Try adjusting company capacities or industry distribution to make the problem feasible.")
 
 # Footer
 st.sidebar.markdown("---")
 st.sidebar.info(f"""
 **Co-op Placement Optimizer**  
-Version 3.0 - Manual Editor
+Version 4.0 - Enhanced Validation
 Built with Streamlit & PuLP
 
 Current Data:
 - Students: {len(st.session_state.students_df) if st.session_state.data_loaded else 0}
 - Companies: {len(st.session_state.companies_df) if st.session_state.data_loaded else 0}
+- Industries: {st.session_state.companies_df['industry'].nunique() if st.session_state.data_loaded and len(st.session_state.companies_df) > 0 else 0}
+
+Features:
+✅ Data validation
+✅ Feasibility checking
+✅ Missing ranking handling
+✅ Industry capacity analysis
+✅ Enhanced error messages
 """)
