@@ -543,7 +543,7 @@ elif page == "Manual Data Editor":
         else:
             st.info("No companies yet. Add companies above.")
     
-    # TAB 3: RANKINGS EDITOR - AUTO-SAVE WITH DROPDOWNS
+    # TAB 3: RANKINGS EDITOR
     with tab3:
         st.header("Rankings Management")
         
@@ -560,219 +560,64 @@ elif page == "Manual Data Editor":
                 )
             
             st.write("**Edit Rankings (1-10, where 10 is highest preference)**")
-            st.info(f"📝 Changes save automatically | Total rankings: {len(st.session_state.students_df)} students × {len(st.session_state.companies_df)} companies = {len(st.session_state.rankings_df)}")
+            st.info(f"Total rankings to edit: {len(st.session_state.students_df)} students × {len(st.session_state.companies_df)} companies = {len(st.session_state.rankings_df)} rankings")
             
-            # Bulk operations at the top
-            st.subheader("Quick Actions")
-            col1, col2, col3 = st.columns(3)
+            # Create a pivot table for easier editing
+            rankings_pivot = st.session_state.rankings_df.pivot(
+                index='student_id',
+                columns='company_id',
+                values='ranking'
+            )
+            
+            # Add student names as index
+            student_names = st.session_state.students_df.set_index('student_id')['student_name']
+            rankings_pivot.index = rankings_pivot.index.map(student_names)
+            
+            # Add company names as columns
+            company_names = st.session_state.companies_df.set_index('company_id')['company_name']
+            rankings_pivot.columns = rankings_pivot.columns.map(company_names)
+            
+            # Allow editing
+            edited_rankings = st.data_editor(
+                rankings_pivot,
+                use_container_width=True,
+                key="rankings_editor"
+            )
+            
+            if st.button("💾 Save Rankings"):
+                # Convert back to long format
+                rankings_long = edited_rankings.reset_index().melt(
+                    id_vars='index',
+                    var_name='company_name',
+                    value_name='ranking'
+                )
+                rankings_long.columns = ['student_name', 'company_name', 'ranking']
+                
+                # Map back to IDs
+                student_id_map = st.session_state.students_df.set_index('student_name')['student_id']
+                company_id_map = st.session_state.companies_df.set_index('company_name')['company_id']
+                
+                rankings_long['student_id'] = rankings_long['student_name'].map(student_id_map)
+                rankings_long['company_id'] = rankings_long['company_name'].map(company_id_map)
+                
+                st.session_state.rankings_df = rankings_long[['student_id', 'company_id', 'ranking']]
+                st.session_state.data_loaded = True
+                st.success("Rankings saved!")
+                st.rerun()
+            
+            # Bulk operations
+            st.subheader("Bulk Operations")
+            col1, col2 = st.columns(2)
             with col1:
-                if st.button("🔄 Reset All to 5"):
+                if st.button("🔄 Reset All Rankings to 5"):
                     st.session_state.rankings_df['ranking'] = 5
                     st.success("All rankings reset to 5")
                     st.rerun()
             with col2:
-                if st.button("🎲 Randomize All"):
+                if st.button("🎲 Randomize Rankings"):
                     st.session_state.rankings_df['ranking'] = np.random.randint(1, 11, len(st.session_state.rankings_df))
                     st.success("Rankings randomized")
                     st.rerun()
-            with col3:
-                default_rank = st.selectbox("Set All to:", [1,2,3,4,5,6,7,8,9,10], index=4, key="bulk_rank")
-                if st.button("📌 Apply to All"):
-                    st.session_state.rankings_df['ranking'] = default_rank
-                    st.success(f"All rankings set to {default_rank}")
-                    st.rerun()
-            
-            st.markdown("---")
-            
-            # Selection method
-            edit_mode = st.radio(
-                "Editing Mode:",
-                ["By Student (Vertical)", "By Company (Vertical)", "Grid View (Data Editor)"],
-                horizontal=True
-            )
-            
-            if edit_mode == "By Student (Vertical)":
-                st.subheader("Edit by Student")
-                
-                # Select student
-                selected_student = st.selectbox(
-                    "Select Student:",
-                    st.session_state.students_df['student_name'].tolist(),
-                    key="student_selector"
-                )
-                
-                student_id = st.session_state.students_df[
-                    st.session_state.students_df['student_name'] == selected_student
-                ]['student_id'].values[0]
-                
-                st.write(f"**Rankings for {selected_student}:**")
-                
-                # Get current rankings for this student
-                student_rankings = st.session_state.rankings_df[
-                    st.session_state.rankings_df['student_id'] == student_id
-                ].copy()
-                
-                # Merge with company info
-                student_rankings = student_rankings.merge(
-                    st.session_state.companies_df[['company_id', 'company_name', 'industry']],
-                    on='company_id'
-                )
-                student_rankings = student_rankings.sort_values('company_name')
-                
-                # Create columns for better layout
-                num_companies = len(student_rankings)
-                cols_per_row = 3
-                
-                for idx, row in student_rankings.iterrows():
-                    col_idx = idx % cols_per_row
-                    if col_idx == 0:
-                        cols = st.columns(cols_per_row)
-                    
-                    with cols[col_idx]:
-                        company_id = row['company_id']
-                        company_name = row['company_name']
-                        industry = row['industry']
-                        current_ranking = int(row['ranking'])
-                        
-                        # Use selectbox with automatic save
-                        new_ranking = st.selectbox(
-                            f"{company_name}",
-                            options=list(range(1, 11)),
-                            index=current_ranking - 1,
-                            key=f"rank_s{student_id}_c{company_id}",
-                            help=f"Industry: {industry}"
-                        )
-                        
-                        # Auto-save if changed
-                        if new_ranking != current_ranking:
-                            st.session_state.rankings_df.loc[
-                                (st.session_state.rankings_df['student_id'] == student_id) &
-                                (st.session_state.rankings_df['company_id'] == company_id),
-                                'ranking'
-                            ] = new_ranking
-                            st.session_state.data_loaded = True
-            
-            elif edit_mode == "By Company (Vertical)":
-                st.subheader("Edit by Company")
-                
-                # Select company
-                selected_company = st.selectbox(
-                    "Select Company:",
-                    st.session_state.companies_df['company_name'].tolist(),
-                    key="company_selector"
-                )
-                
-                company_id = st.session_state.companies_df[
-                    st.session_state.companies_df['company_name'] == selected_company
-                ]['company_id'].values[0]
-                
-                company_industry = st.session_state.companies_df[
-                    st.session_state.companies_df['company_name'] == selected_company
-                ]['industry'].values[0]
-                
-                st.write(f"**Rankings for {selected_company}** (Industry: {company_industry})")
-                
-                # Get current rankings for this company
-                company_rankings = st.session_state.rankings_df[
-                    st.session_state.rankings_df['company_id'] == company_id
-                ].copy()
-                
-                # Merge with student info
-                company_rankings = company_rankings.merge(
-                    st.session_state.students_df[['student_id', 'student_name']],
-                    on='student_id'
-                )
-                company_rankings = company_rankings.sort_values('student_name')
-                
-                # Create columns for better layout
-                cols_per_row = 3
-                
-                for idx, row in company_rankings.iterrows():
-                    col_idx = idx % cols_per_row
-                    if col_idx == 0:
-                        cols = st.columns(cols_per_row)
-                    
-                    with cols[col_idx]:
-                        student_id = row['student_id']
-                        student_name = row['student_name']
-                        current_ranking = int(row['ranking'])
-                        
-                        # Use selectbox with automatic save
-                        new_ranking = st.selectbox(
-                            f"{student_name}",
-                            options=list(range(1, 11)),
-                            index=current_ranking - 1,
-                            key=f"rank_comp_s{student_id}_c{company_id}"
-                        )
-                        
-                        # Auto-save if changed
-                        if new_ranking != current_ranking:
-                            st.session_state.rankings_df.loc[
-                                (st.session_state.rankings_df['student_id'] == student_id) &
-                                (st.session_state.rankings_df['company_id'] == company_id),
-                                'ranking'
-                            ] = new_ranking
-                            st.session_state.data_loaded = True
-            
-            else:  # Grid View
-                st.subheader("Grid View - Direct Editing")
-                st.warning("⚠️ Grid view requires clicking 'Save Rankings' button below")
-                
-                # Create a pivot table for easier editing
-                rankings_pivot = st.session_state.rankings_df.pivot(
-                    index='student_id',
-                    columns='company_id',
-                    values='ranking'
-                )
-                
-                # Add student names as index
-                student_names = st.session_state.students_df.set_index('student_id')['student_name']
-                rankings_pivot.index = rankings_pivot.index.map(student_names)
-                
-                # Add company names as columns
-                company_names = st.session_state.companies_df.set_index('company_id')['company_name']
-                rankings_pivot.columns = rankings_pivot.columns.map(company_names)
-                
-                # Allow editing
-                edited_rankings = st.data_editor(
-                    rankings_pivot,
-                    use_container_width=True,
-                    key="rankings_grid_editor"
-                )
-                
-                if st.button("💾 Save Rankings", type="primary"):
-                    # Convert back to long format
-                    rankings_long = edited_rankings.reset_index().melt(
-                        id_vars='index',
-                        var_name='company_name',
-                        value_name='ranking'
-                    )
-                    rankings_long.columns = ['student_name', 'company_name', 'ranking']
-                    
-                    # Map back to IDs
-                    student_id_map = st.session_state.students_df.set_index('student_name')['student_id']
-                    company_id_map = st.session_state.companies_df.set_index('company_name')['company_id']
-                    
-                    rankings_long['student_id'] = rankings_long['student_name'].map(student_id_map)
-                    rankings_long['company_id'] = rankings_long['company_name'].map(company_id_map)
-                    
-                    st.session_state.rankings_df = rankings_long[['student_id', 'company_id', 'ranking']]
-                    st.session_state.data_loaded = True
-                    st.success("Rankings saved!")
-                    st.rerun()
-            
-            # Show summary statistics
-            st.markdown("---")
-            st.subheader("Current Rankings Summary")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Average Ranking", f"{st.session_state.rankings_df['ranking'].mean():.2f}")
-            with col2:
-                st.metric("Min Ranking", f"{st.session_state.rankings_df['ranking'].min():.0f}")
-            with col3:
-                st.metric("Max Ranking", f"{st.session_state.rankings_df['ranking'].max():.0f}")
-            with col4:
-                st.metric("Std Dev", f"{st.session_state.rankings_df['ranking'].std():.2f}")
     
     # TAB 4: SUMMARY
     with tab4:
