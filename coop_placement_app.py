@@ -572,10 +572,12 @@ elif page == "Manual Data Editor":
             # Add student names as index
             student_names = st.session_state.students_df.set_index('student_id')['student_name']
             rankings_pivot.index = rankings_pivot.index.map(student_names)
+            rankings_pivot.index.name = 'Student'  # Explicitly name the index
             
             # Add company names as columns
             company_names = st.session_state.companies_df.set_index('company_id')['company_name']
             rankings_pivot.columns = rankings_pivot.columns.map(company_names)
+            rankings_pivot.columns.name = 'Company'  # Explicitly name the columns
             
             # Allow editing
             edited_rankings = st.data_editor(
@@ -586,11 +588,24 @@ elif page == "Manual Data Editor":
             
             if st.button("💾 Save Rankings"):
                 # Convert back to long format
-                rankings_long = edited_rankings.reset_index().melt(
-                    id_vars='index',
-                    var_name='company_name',
-                    value_name='ranking'
-                )
+                rankings_reset = edited_rankings.reset_index()
+                
+                # Try to use the explicit 'Student' index name, fallback to first column
+                try:
+                    rankings_long = rankings_reset.melt(
+                        id_vars='Student',
+                        var_name='company_name',
+                        value_name='ranking'
+                    )
+                except KeyError:
+                    # Fallback: use the first column (which is the index column)
+                    index_col_name = rankings_reset.columns[0]
+                    rankings_long = rankings_reset.melt(
+                        id_vars=index_col_name,
+                        var_name='company_name',
+                        value_name='ranking'
+                    )
+                
                 rankings_long.columns = ['student_name', 'company_name', 'ranking']
                 
                 # Map back to IDs
