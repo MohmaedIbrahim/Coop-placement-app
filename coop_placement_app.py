@@ -281,30 +281,38 @@ def check_optimization_feasibility(students_df, companies_df):
     
     n_students = len(students_df)
     
-    # Check total capacities
+    # Check total capacities (HARD CONSTRAINT)
     total_it2_cap = companies_df['it2_capacity'].sum()
     total_it3_cap = companies_df['it3_capacity'].sum()
     
     if total_it2_cap < n_students:
         errors.append(f"❌ Total IT2 capacity ({total_it2_cap}) < number of students ({n_students})")
+        errors.append(f"   → Related to Constraint 1: Σⱼ xᵢⱼ = 1 (every student needs one IT2)")
     
     if total_it3_cap < n_students:
         errors.append(f"❌ Total IT3 capacity ({total_it3_cap}) < number of students ({n_students})")
+        errors.append(f"   → Related to Constraint 2: Σⱼ yᵢⱼ = 1 (every student needs one IT3)")
     
-    # Check industry capacities
+    # Check industry capacities (WORST-CASE WARNING, not hard error)
     industry_caps = companies_df.groupby('industry')[['it2_capacity', 'it3_capacity']].sum()
     
     for industry, row in industry_caps.iterrows():
         total_industry_cap = row['it2_capacity'] + row['it3_capacity']
         if total_industry_cap < n_students:
-            errors.append(f"❌ Industry '{industry}' total capacity ({int(total_industry_cap)}) < students ({n_students})")
+            warnings.append(
+                f"⚠️ Industry '{industry}' total capacity ({int(total_industry_cap)}) < students ({n_students})\n"
+                f"   → Related to Constraint 6: Σⱼ∈Industry (xᵢⱼ + yᵢⱼ) ≤ 1 (at most one placement per industry)\n"
+                f"   → This is a WORST-CASE check: if all students prefer this industry, optimization will fail\n"
+                f"   → However, if preferences are distributed, optimization may still succeed\n"
+                f"   → You can proceed, but be aware the problem might be infeasible"
+            )
     
     # Warnings for tight capacities
     if total_it2_cap < n_students * 1.5:
-        warnings.append(f"⚠️ IT2 capacity is tight ({total_it2_cap} vs {n_students} students)")
+        warnings.append(f"⚠️ IT2 capacity is tight ({total_it2_cap} vs {n_students} students) - solution quality may be limited")
     
     if total_it3_cap < n_students * 1.5:
-        warnings.append(f"⚠️ IT3 capacity is tight ({total_it3_cap} vs {n_students} students)")
+        warnings.append(f"⚠️ IT3 capacity is tight ({total_it3_cap} vs {n_students} students) - solution quality may be limited")
     
     is_feasible = len(errors) == 0
     return is_feasible, errors, warnings
@@ -947,29 +955,51 @@ elif page == "Optimization":
                 else:
                     st.error("❌ Optimization failed to find a solution.")
                     
-                    st.subheader("Possible Reasons:")
+                    st.subheader("Possible Reasons (with constraint references):")
                     reasons = []
                     
                     # Check capacity issues
                     if companies_df['it2_capacity'].sum() < n_students:
-                        reasons.append("• Total IT2 capacity is less than number of students")
+                        reasons.append(
+                            "• Total IT2 capacity is less than number of students\n"
+                            "  → Violates Constraint 1: Σⱼ xᵢⱼ = 1 (every student needs one IT2)"
+                        )
                     if companies_df['it3_capacity'].sum() < n_students:
-                        reasons.append("• Total IT3 capacity is less than number of students")
+                        reasons.append(
+                            "• Total IT3 capacity is less than number of students\n"
+                            "  → Violates Constraint 2: Σⱼ yᵢⱼ = 1 (every student needs one IT3)"
+                        )
                     
                     # Check industry diversity feasibility
                     industry_capacities = companies_df.groupby('industry')[['it2_capacity', 'it3_capacity']].sum()
                     for industry, row in industry_capacities.iterrows():
                         total_cap = row['it2_capacity'] + row['it3_capacity']
                         if total_cap < n_students:
-                            reasons.append(f"• Industry '{industry}' has insufficient total capacity ({int(total_cap)} < {n_students})")
+                            reasons.append(
+                                f"• Industry '{industry}' has insufficient total capacity ({int(total_cap)} < {n_students})\n"
+                                f"  → Related to Constraint 6: Σⱼ∈Industry (xᵢⱼ + yᵢⱼ) ≤ 1\n"
+                                f"  → Student preferences concentrated in this industry beyond its capacity"
+                            )
                     
                     if not reasons:
-                        reasons.append("• Unknown issue - please check your data")
+                        reasons.append(
+                            "• Unknown infeasibility - the combination of constraints cannot be satisfied\n"
+                            "  → Check: Constraint 5 (different companies) + Constraint 6 (industry diversity)\n"
+                            "  → May need to adjust capacities, add companies, or review student preferences"
+                        )
                     
                     for reason in reasons:
                         st.write(reason)
                     
-                    st.info("💡 Try adjusting company capacities or industry distribution to make the problem feasible.")
+                    st.info(
+                        "💡 **How to fix:**\n\n"
+                        "1. Increase company capacities (especially in popular industries)\n"
+                        "2. Add more companies to industries with low capacity\n"
+                        "3. Check that each industry total capacity is close to the number of students\n"
+                        "4. Review student rankings - are they too concentrated in few companies?\n\n"
+                        "**Mathematical requirement:** For N students across K industries, optimal distribution "
+                        "is when each industry has total capacity ≈ N to avoid infeasibility."
+                    )
 
 # ============================================================================
 # FOOTER
