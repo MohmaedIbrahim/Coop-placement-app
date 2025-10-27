@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 import pulp
 from io import BytesIO
 import openpyxl
@@ -27,7 +26,7 @@ if 'wide_format_df' not in st.session_state:
 # Sidebar navigation
 st.sidebar.title("🎓 Co-op Placement Optimizer")
 page = st.sidebar.radio("Navigation", 
-                        ["Data Setup", "Manual Data Editor", "Exploratory Analysis", "Clustering", "Optimization"],
+                        ["Data Setup", "Manual Data Editor", "Exploratory Analysis", "Optimization"],
                         index=0)
 
 # ============================================================================
@@ -550,106 +549,7 @@ elif page == "Exploratory Analysis":
         st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================================
-# PAGE 4: CLUSTERING
-# ============================================================================
-
-elif page == "Clustering":
-    st.title("🔍 Student Clustering Analysis")
-    
-    if not st.session_state.data_loaded:
-        st.warning("⚠️ Please load data first in the Data Setup page.")
-    else:
-        students_df = st.session_state.students_df
-        companies_df = st.session_state.companies_df
-        rankings_df = st.session_state.rankings_df
-        
-        st.write("""
-        Cluster students based on their company preferences to identify groups with similar interests.
-        """)
-        
-        # Create preference matrix
-        pref_matrix = rankings_df.pivot(index='student_id', columns='company_id', values='ranking').fillna(0).values
-        
-        # Hierarchical clustering
-        st.header("Hierarchical Clustering")
-        
-        method = st.selectbox("Linkage Method", ["ward", "complete", "average", "single"])
-        Z = linkage(pref_matrix, method=method)
-        
-        # Dendrogram
-        fig = go.Figure()
-        
-        # Create dendrogram data
-        dn = dendrogram(Z, no_plot=True, labels=students_df['student_name'].tolist())
-        
-        # Plot dendrogram
-        icoord = np.array(dn['icoord'])
-        dcoord = np.array(dn['dcoord'])
-        
-        for xs, ys in zip(icoord, dcoord):
-            fig.add_trace(go.Scatter(x=xs, y=ys, mode='lines', 
-                                    line=dict(color='rgb(60,60,60)', width=1),
-                                    hoverinfo='skip', showlegend=False))
-        
-        # Add labels
-        unique_x = sorted(set(icoord.flatten()))
-        name_labels = [dn['ivl'][unique_x.index(x)] if x in unique_x else '' 
-                      for x in unique_x]
-        
-        fig.update_layout(
-            title="Student Clustering Dendrogram",
-            xaxis_title="Students",
-            yaxis_title="Distance",
-            height=500,
-            xaxis=dict(
-                tickvals=unique_x,
-                ticktext=name_labels,
-                tickangle=-45
-            )
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Cluster assignment
-        st.header("Cluster Assignment")
-        max_clusters = min(10, len(students_df) - 1)
-        n_clusters = st.slider("Select Number of Clusters", 2, max_clusters, min(3, max_clusters))
-        
-        clusters = fcluster(Z, n_clusters, criterion='maxclust')
-        
-        students_clustered = students_df.copy()
-        students_clustered['cluster'] = clusters
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Cluster Sizes")
-            cluster_sizes = students_clustered['cluster'].value_counts().sort_index()
-            fig = px.bar(x=cluster_sizes.index, y=cluster_sizes.values,
-                        labels={'x': 'Cluster', 'y': 'Number of Students'},
-                        title=f"Students per Cluster (Total: {n_clusters} clusters)")
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.subheader("Cluster Assignments")
-            st.dataframe(students_clustered[['student_name', 'cluster']].sort_values('cluster'),
-                        height=400)
-        
-        # Cluster characteristics
-        st.header("Cluster Characteristics")
-        for cluster_id in range(1, n_clusters + 1):
-            with st.expander(f"Cluster {cluster_id} ({cluster_sizes[cluster_id]} students)"):
-                cluster_students = students_clustered[students_clustered['cluster'] == cluster_id]['student_id'].tolist()
-                cluster_rankings = rankings_df[rankings_df['student_id'].isin(cluster_students)]
-                
-                avg_pref = cluster_rankings.groupby('company_id')['ranking'].mean().sort_values(ascending=False).head(5)
-                avg_pref = avg_pref.reset_index()
-                avg_pref = avg_pref.merge(companies_df[['company_id', 'company_name']], on='company_id')
-                
-                st.write("**Top 5 Preferred Companies (average):**")
-                st.dataframe(avg_pref[['company_name', 'ranking']], hide_index=True)
-
-# ============================================================================
-# PAGE 5: OPTIMIZATION
+# PAGE 4: OPTIMIZATION
 # ============================================================================
 
 elif page == "Optimization":
@@ -857,60 +757,6 @@ elif page == "Optimization":
                     with tab3:
                         combined = it2_df.merge(it3_df, on='Student', suffixes=('_IT2', '_IT3'))
                         st.dataframe(combined, hide_index=True, height=500)
-                        
-                        # Check diversity constraint satisfaction
-                        st.subheader("Diversity Verification")
-                        diversity_check = []
-                        for _, row in combined.iterrows():
-                            same_industry = row['Industry_IT2'] == row['Industry_IT3']
-                            diversity_check.append({
-                                'Student': row['Student'],
-                                'IT2_Industry': row['Industry_IT2'],
-                                'IT3_Industry': row['Industry_IT3'],
-                                'Diverse': '✅' if not same_industry else '❌'
-                            })
-                        
-                        diversity_df = pd.DataFrame(diversity_check)
-                        all_diverse = all(row['Diverse'] == '✅' for row in diversity_check)
-                        
-                        if all_diverse:
-                            st.success("✅ All students have diverse industry placements!")
-                        else:
-                            st.warning("⚠️ Some students have placements in the same industry")
-                            st.dataframe(diversity_df[diversity_df['Diverse'] == '❌'])
-                    
-                    st.header("Placement Analysis")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        fig = px.histogram(pd.concat([it2_df['Ranking'], it3_df['Ranking']]),
-                                         x='Ranking', nbins=10,
-                                         title="Distribution of Assigned Rankings")
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        industry_dist = pd.concat([
-                            it2_df['Industry'].value_counts().rename('IT2'),
-                            it3_df['Industry'].value_counts().rename('IT3')
-                        ], axis=1).fillna(0)
-                        
-                        fig = px.bar(industry_dist, barmode='group',
-                                   title="Placements by Industry")
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Additional analytics
-                    st.subheader("Student Satisfaction Analysis")
-                    combined['Total_Ranking'] = combined['Ranking_IT2'] + combined['Ranking_IT3']
-                    combined['Avg_Ranking'] = combined['Total_Ranking'] / 2
-                    
-                    fig = px.bar(combined.sort_values('Total_Ranking', ascending=False).head(20),
-                               x='Student', y='Total_Ranking',
-                               title="Top 20 Students by Total Ranking",
-                               color='Avg_Ranking',
-                               color_continuous_scale='RdYlGn')
-                    fig.update_xaxes(tickangle=-45)
-                    st.plotly_chart(fig, use_container_width=True)
                     
                     st.header("Export Results")
                     
@@ -1008,7 +854,7 @@ elif page == "Optimization":
 st.sidebar.markdown("---")
 st.sidebar.info(f"""
 **Co-op Placement Optimizer**  
-Version 5.0 - Wide Format Support
+Version 5.1 - Streamlined Edition
 Built with Streamlit & PuLP
 
 Current Data:
@@ -1017,9 +863,9 @@ Current Data:
 - Industries: {st.session_state.companies_df['industry'].nunique() if st.session_state.data_loaded and len(st.session_state.companies_df) > 0 else 0}
 
 Features:
-✅ Wide format Excel support
-✅ Students as columns
-✅ Data validation
-✅ Manual editing
-✅ Full optimization
+✅ Wide format Excel (students as columns)
+✅ Manual data editing
+✅ Smart validation (errors vs warnings)
+✅ Constraint-referenced diagnostics
+✅ Streamlined optimization results
 """)
