@@ -113,7 +113,7 @@ def create_wide_format_template(n_students=11, n_companies=11):
     ws.cell(instructions_row + 2, 1, "2. Enter company names in the 'Companies' column")
     ws.cell(instructions_row + 3, 1, "3. Set IT2 CAP and IT3 CAP (0 if not offering)")
     ws.cell(instructions_row + 4, 1, "4. Add/modify student names in column headers")
-    ws.cell(instructions_row + 5, 1, "5. Enter rankings (1-10, higher = better) in each student's column")
+    ws.cell(instructions_row + 5, 1, "5. Enter rankings (1-11, where 1 = most preferred, 11 = least preferred)")
     ws.cell(instructions_row + 6, 1, "6. Save and upload to the app")
     
     # Save to BytesIO
@@ -505,28 +505,6 @@ elif page == "Exploratory Analysis":
                         title="Distribution of Companies by Industry")
             st.plotly_chart(fig, use_container_width=True)
         
-        # Ranking analysis
-        st.header("Ranking Analysis")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Ranking Distribution")
-            fig = px.histogram(rankings_df[rankings_df['ranking'] > 0], x='ranking', nbins=10,
-                             title="Distribution of Student Rankings")
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.subheader("Company Popularity")
-            company_avg = rankings_df.groupby('company_id')['ranking'].mean().sort_values(ascending=False).head(10)
-            company_names = companies_df.set_index('company_id')['company_name']
-            company_avg.index = company_avg.index.map(company_names)
-            
-            fig = px.bar(x=company_avg.values, y=company_avg.index, orientation='h',
-                        title="Top 10 Companies by Average Ranking",
-                        labels={'x': 'Average Ranking', 'y': 'Company'})
-            st.plotly_chart(fig, use_container_width=True)
-        
         # Student preferences heatmap
         st.header("Student-Company Preference Heatmap")
         
@@ -542,9 +520,9 @@ elif page == "Exploratory Analysis":
         
         fig = px.imshow(heatmap_data, 
                        labels=dict(x="Company", y="Student", color="Ranking"),
-                       title="Student Rankings Heatmap",
+                       title="Student Rankings Heatmap (1=Best, 11=Worst)",
                        aspect="auto",
-                       color_continuous_scale='RdYlGn')
+                       color_continuous_scale='RdYlGn_r')  # Reversed: green for 1 (best), red for 11 (worst)
         fig.update_xaxes(side="top", tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
 
@@ -636,8 +614,9 @@ elif page == "Optimization":
                     for j in companies:
                         complete_rankings_dict[i, j] = rankings_dict.get((i, j), 0)
                 
-                # Objective function: Maximize total ranking
-                prob += pulp.lpSum([complete_rankings_dict[i, j] * (x[i, j] + y[i, j]) 
+                # Objective function: Minimize total ranking (1 is best, 11 is worst)
+                # Equivalent to maximizing (12 - ranking)
+                prob += pulp.lpSum([(12 - complete_rankings_dict[i, j]) * (x[i, j] + y[i, j]) 
                                    for i in students for j in companies])
                 
                 # Constraint 1: Every student does exactly one IT2 placement
