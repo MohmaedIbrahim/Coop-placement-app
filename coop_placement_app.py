@@ -134,7 +134,7 @@ def parse_wide_format_excel(file):
             return None, None, None, None, "Missing required columns: Group, Companies, IT2 CAP, IT3 CAP"
         
         # Forward fill the Group column
-        df['Group'] = df['Group'].fillna(method='ffill')
+        df['Group'] = df['Group'].ffill()
         
         # Clean up: remove rows where Companies is NaN
         df = df.dropna(subset=['Companies'])
@@ -227,7 +227,7 @@ def convert_from_wide_format(wide_df):
     
     # Forward fill Group column
     df = wide_df.copy()
-    df['Group'] = df['Group'].replace('', np.nan).fillna(method='ffill')
+    df['Group'] = df['Group'].replace('', np.nan).ffill()
     
     # Extract student columns
     student_cols = [col for col in df.columns if col not in ['Group', 'Companies', 'IT2 CAP', 'IT3 CAP']]
