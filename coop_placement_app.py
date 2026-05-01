@@ -393,7 +393,7 @@ if page == "Data Setup":
             st.session_state.companies_df = None
             st.session_state.rankings_df = None
             st.session_state.wide_format_df = None
-            st.experimental_rerun()
+            st.rerun()
 
 # ============================================================================
 # PAGE 2: MANUAL DATA EDITOR
